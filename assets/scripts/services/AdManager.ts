@@ -2,6 +2,7 @@ import { _decorator, Component, sys } from 'cc';
 import { EventBus, GameEvents } from '../utils/EventBus';
 import { AnalyticsService } from './AnalyticsService';
 import { WeChatService } from './WeChatService';
+import { FLAG_ADS_ENABLED, FLAG_INTERSTITIAL_ADS } from '../data/FeatureFlags';
 
 const { ccclass, property } = _decorator;
 
@@ -12,14 +13,6 @@ const { ccclass, property } = _decorator;
 const REWARDED_VIDEO_AD_UNIT_ID = '';  // wx.RewardedVideoAd
 const BANNER_AD_UNIT_ID         = '';  // wx.BannerAd
 const INTERSTITIAL_AD_UNIT_ID   = '';  // wx.InterstitialAd (shown at round breaks)
-
-// ---------------------------------------------------------------------------
-// V1 feature flags — flip to true AFTER WeChat review approval.
-// Interstitials carry higher review scrutiny on first submission; launching
-// them post-approval in V2 eliminates the risk of a stalled launch.
-// ---------------------------------------------------------------------------
-/** V1 kill-switch: set to true in V2 after review approval to enable interstitial placement. */
-const INTERSTITIAL_ENABLED = false;
 
 // After an ad error, wait this many seconds before allowing another load attempt.
 const ERROR_COOLDOWN_S = 30;
@@ -122,7 +115,7 @@ export class AdManager extends Component {
         fail: () => { /* use default sizing */ },
       });
       this._initRewardedAd();
-      if (INTERSTITIAL_ENABLED) this._initInterstitialAd(); // V2 only
+      if (FLAG_INTERSTITIAL_ADS) this._initInterstitialAd(); // V2 only
     }
   }
 
@@ -206,7 +199,7 @@ export class AdManager extends Component {
    * Call destroyBanner() in the scene's onDestroy to release resources.
    */
   showBanner(): void {
-    if (!this._isWxEnv || !ADS_ENABLED) return;
+    if (!this._isWxEnv || !FLAG_ADS_ENABLED) return;
 
     // Re-show existing banner if it was hidden
     if (this._bannerAd) {
@@ -296,9 +289,9 @@ export class AdManager extends Component {
 
   /**
    * Whether an interstitial ad is loaded and ready to display.
-   * Always false when INTERSTITIAL_ENABLED = false (V1 mode).
+   * Always false when FLAG_INTERSTITIAL_ADS = false (V1 mode).
    */
-  get isInterstitialReady(): boolean { return INTERSTITIAL_ENABLED && this._interstitialReady; }
+  get isInterstitialReady(): boolean { return FLAG_INTERSTITIAL_ADS && this._interstitialReady; }
 
   /**
    * Show the interstitial ad.
@@ -333,7 +326,7 @@ export class AdManager extends Component {
   // ---------------------------------------------------------------------------
 
   private _initRewardedAd(): void {
-    if (!this._isWxEnv || !ADS_ENABLED || this._adState === AdState.LOADING) return;
+    if (!this._isWxEnv || !FLAG_ADS_ENABLED || this._adState === AdState.LOADING) return;
 
     try {
       this._rewardedAd = wx.createRewardedVideoAd({

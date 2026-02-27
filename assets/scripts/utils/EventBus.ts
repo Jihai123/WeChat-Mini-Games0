@@ -36,6 +36,10 @@ export const GameEvents = {
   INTERSTITIAL_SHOWN:         'INTERSTITIAL_SHOWN',         // no payload
   LEADERBOARD_OPEN:           'LEADERBOARD_OPEN',           // no payload
   PRE_ROUND_BONUS_ACTIVATED:  'PRE_ROUND_BONUS_ACTIVATED',  // payload: { bonusSpawns: number }
+  // --- Retention: achievements & missions ---
+  ACHIEVEMENT_UNLOCKED:       'ACHIEVEMENT_UNLOCKED',       // payload: { id, title, icon, rewardSpawns }
+  MISSION_COMPLETED:          'MISSION_COMPLETED',          // payload: { description, completedCount }
+  ALL_MISSIONS_DONE:          'ALL_MISSIONS_DONE',          // payload: { bonusSpawns: number }
 } as const;
 
 export type GameEventName = typeof GameEvents[keyof typeof GameEvents];

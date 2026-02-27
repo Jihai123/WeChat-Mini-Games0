@@ -8,22 +8,18 @@ import { AdManager, AdRewardResult } from '../services/AdManager';
 import { DailyRewardManager } from '../monetization/DailyRewardManager';
 import { AdPlacementManager } from '../monetization/AdPlacementManager';
 import { LeaderboardService } from '../social/LeaderboardService';
+import { AchievementManager } from '../retention/AchievementManager';
+import { DailyMissionManager } from '../retention/DailyMissionManager';
 import { STORAGE_KEYS } from '../data/GameConfig';
 import { IPlayerData } from '../interfaces/IPlayerData';
 import { AnalyticsService } from '../services/AnalyticsService';
 import { EventBus, GameEvents } from '../utils/EventBus';
+import { FLAG_DAILY_AD_BONUS } from '../data/FeatureFlags';
 
 const { ccclass, property } = _decorator;
 
 // If GameScene hasn't loaded within this many ms, re-enable the play button.
 const PLAY_BUTTON_TIMEOUT_MS = 8_000;
-
-/**
- * V1 kill-switch: daily ad-bonus tier (watch ad for extra spawns) is disabled
- * until post-approval V2 rollout.  The free daily-claim tier remains active.
- * Flip to `true` in V2 after WeChat review approves the rewarded ad placement.
- */
-const V1_DAILY_AD_BONUS_ENABLED = false;
 
 /**
  * MainSceneUI — production main menu controller.
@@ -111,6 +107,29 @@ export class MainSceneUI extends Component {
   @property(Node)   leaderboardPanel:      Node   | null = null;
   @property(Button) btnCloseLeaderboard:   Button | null = null;
 
+  // ----- Daily Missions -----
+  /**
+   * "X/3 任务" progress label on the main menu.
+   * Updated on scene load so the player immediately sees their daily progress.
+   */
+  @property(Label)  missionProgressLabel:  Label  | null = null;
+
+  /** Red-dot badge: visible when at least one mission is not yet completed. */
+  @property(Node)   missionBadge:          Node   | null = null;
+
+  /** Optional button to open a full missions panel (Inspector wirable). */
+  @property(Button) btnMissions:           Button | null = null;
+
+  /** Panel node listing mission descriptions (hidden by default). */
+  @property(Node)   missionsPanel:         Node   | null = null;
+
+  /** Close button inside the missions panel. */
+  @property(Button) btnCloseMissions:      Button | null = null;
+
+  // ----- Achievements -----
+  /** "成就 X/12" summary label — glanceable progress on the main menu. */
+  @property(Label)  achievementSummaryLabel: Label | null = null;
+
   // ------------------------------------------------------------------
   // Private state
   // ------------------------------------------------------------------
@@ -125,12 +144,16 @@ export class MainSceneUI extends Component {
     this._populateUI();
     this._populateDailyReward();
     this._populatePreRoundBonus();
+    this._populateMissions();
+    this._populateAchievements();
 
     this.btnPlay?.node.on(Button.EventType.CLICK,              this._onPlayClicked,        this);
     this.btnDailyReward?.node.on(Button.EventType.CLICK,       this._onDailyRewardClicked, this);
     this.btnPreRoundBonus?.node.on(Button.EventType.CLICK,     this._onPreRoundBonus,      this);
     this.btnLeaderboard?.node.on(Button.EventType.CLICK,       this._onLeaderboardClicked, this);
     this.btnCloseLeaderboard?.node.on(Button.EventType.CLICK,  this._onCloseLeaderboard,   this);
+    this.btnMissions?.node.on(Button.EventType.CLICK,          this._onMissionsClicked,    this);
+    this.btnCloseMissions?.node.on(Button.EventType.CLICK,     this._onCloseMissions,      this);
 
     if (this.versionLabel) this.versionLabel.string = `v${this.versionString}`;
 
@@ -161,6 +184,9 @@ export class MainSceneUI extends Component {
     this.btnPreRoundBonus?.node.off(Button.EventType.CLICK,    this._onPreRoundBonus,      this);
     this.btnLeaderboard?.node.off(Button.EventType.CLICK,      this._onLeaderboardClicked, this);
     this.btnCloseLeaderboard?.node.off(Button.EventType.CLICK, this._onCloseLeaderboard,   this);
+
+    this.btnMissions?.node.off(Button.EventType.CLICK,          this._onMissionsClicked,    this);
+    this.btnCloseMissions?.node.off(Button.EventType.CLICK,     this._onCloseMissions,      this);
 
     EventBus.off(GameEvents.DAILY_REWARD_CLAIMED, this._onDailyRewardGranted, this);
 
@@ -221,7 +247,7 @@ export class MainSceneUI extends Component {
     const state = dr.getState();
 
     // In V1 the ad-bonus tier is disabled; only the free-claim tier is active.
-    const adBonusAvailable = V1_DAILY_AD_BONUS_ENABLED && state.canClaimAdBonus;
+    const adBonusAvailable = FLAG_DAILY_AD_BONUS && state.canClaimAdBonus;
 
     // Badge: visible when any claim is available
     if (this.dailyRewardBadge) {
@@ -314,7 +340,7 @@ export class MainSceneUI extends Component {
       return;
     }
 
-    if (V1_DAILY_AD_BONUS_ENABLED && state.canClaimAdBonus) {
+    if (FLAG_DAILY_AD_BONUS && state.canClaimAdBonus) {
       if (this.btnDailyReward) this.btnDailyReward.interactable = false;
       if (this.dailyRewardBtnLabel) this.dailyRewardBtnLabel.string = '广告加载中…';
 
@@ -414,6 +440,64 @@ export class MainSceneUI extends Component {
         this.dailyStreakLabel.string = days > 0 ? `连续签到 ${days} 天` : '';
       }
     }, 2.0);
+  }
+
+  // ------------------------------------------------------------------
+  // Missions & achievements population
+  // ------------------------------------------------------------------
+
+  /**
+   * Refreshes the "X/3 任务" progress label and badge.
+   * Called on scene load and whenever missions state changes.
+   */
+  private _populateMissions(): void {
+    const dm = DailyMissionManager.instance;
+    if (!dm) return;
+
+    const completed = dm.completedCount;
+    const total     = dm.missions.length;
+
+    if (this.missionProgressLabel) {
+      this.missionProgressLabel.string = `每日任务 ${completed}/${total}`;
+    }
+    // Badge: visible while any mission is unfinished
+    if (this.missionBadge) {
+      this.missionBadge.active = completed < total;
+    }
+    // Hide panel by default
+    if (this.missionsPanel) this.missionsPanel.active = false;
+  }
+
+  /** Refreshes the achievement summary label ("成就 X/12"). */
+  private _populateAchievements(): void {
+    if (!this.achievementSummaryLabel) return;
+    const unlocked = AchievementManager.instance?.unlockedCount ?? 0;
+    const total    = 12; // matches ACHIEVEMENTS catalogue length
+    this.achievementSummaryLabel.string = `成就 ${unlocked}/${total}`;
+  }
+
+  /** Open the daily missions panel. */
+  private _onMissionsClicked(): void {
+    if (!this.missionsPanel || !DailyMissionManager.instance) return;
+    this.missionsPanel.active = true;
+
+    // Populate mission labels inside the panel.
+    // Expects child Labels named Mission0Label, Mission1Label, Mission2Label
+    // (or just iterates all Label children if the naming convention is used).
+    const labels = this.missionsPanel.getComponentsInChildren(Label);
+    const missions = DailyMissionManager.instance.missions;
+    missions.forEach((m, i) => {
+      if (labels[i]) {
+        const status = m.completed ? '✅' : `${m.current}/${m.target}`;
+        labels[i].string = `${m.description}  ${status}`;
+      }
+    });
+
+    AnalyticsService.instance?.track('leaderboard_viewed', { surface: 'missions_panel' });
+  }
+
+  private _onCloseMissions(): void {
+    if (this.missionsPanel) this.missionsPanel.active = false;
   }
 
   private _setPlayLocked(locked: boolean): void {

@@ -10,6 +10,8 @@ import { AdManager, AdRewardResult } from '../services/AdManager';
 import { AdPlacementManager } from '../monetization/AdPlacementManager';
 import { ResultSceneBinder } from '../bindings/SceneBinder';
 import { ISessionResult } from '../interfaces/IScoreData';
+import { AchievementManager } from '../retention/AchievementManager';
+import { DailyMissionManager } from '../retention/DailyMissionManager';
 
 const { ccclass, property } = _decorator;
 
@@ -86,6 +88,13 @@ export class ResultSceneUI extends Component {
   @property(Button) btnHome:         Button | null = null;
 
   /**
+   * Optional toast node for achievement/mission unlock notifications.
+   * If null the feature silently degrades — data is still tracked.
+   * Expects a child Label named 'ToastLabel' (or any Label component).
+   */
+  @property(Node) unlockToastNode:   Node  | null = null;
+
+  /**
    * Score-doubler button node reference.
    * Force-hidden in V1 (ships in V2 after approval).
    * Node kept so Inspector wiring is preserved across deploys.
@@ -135,6 +144,9 @@ export class ResultSceneUI extends Component {
     this._populateStats(result);
     this._runEntranceAnimation(result);
     // _updateAdButtonStatus() is called inside _wireButtons() after a 1.5 s delay
+
+    // Schedule achievement + mission unlock toasts after the score count-up finishes
+    this.scheduleOnce(() => this._showPendingUnlocks(), COUNT_UP_DURATION_S + 0.8);
   }
 
   onDestroy(): void {
@@ -348,6 +360,90 @@ export class ResultSceneUI extends Component {
       }
       this.scheduleOnce(() => void this._safeLoadScene(SceneNames.GAME), 0.8);
     }
+  }
+
+  // ------------------------------------------------------------------
+  // Achievement & mission unlock notifications
+  // ------------------------------------------------------------------
+
+  /**
+   * Build and play at most 2 unlock toasts per settlement (BUG-04 fix).
+   *
+   * Toast 0 — Achievements (if any): merged into one message listing count +
+   *   total reward spawns so even unlocking 3 achievements at once = 1 toast.
+   * Toast 1 — Missions (if any): merged into one message.  If all 3 missions
+   *   are done the all-done celebration copy is included in the same toast.
+   *
+   * Total screen time is capped at ~4.5 s (2 toasts × 2.2 s gap) regardless
+   * of how many achievements or missions fire in a single session.
+   *
+   * If `unlockToastNode` is not wired the feature degrades gracefully.
+   */
+  private _showPendingUnlocks(): void {
+    if (!this.isValid) return;
+
+    const toasts: string[] = [];
+
+    // ── Toast 0: achievements (merged) ──────────────────────────────
+    const achs = AchievementManager.lastSessionUnlocked;
+    if (achs.length > 0) {
+      if (achs.length === 1) {
+        const a = achs[0];
+        toasts.push(`成就解锁！${a.icon} ${a.title}\n${a.description}\n+${a.rewardSpawns} 下局道具`);
+      } else {
+        const totalSpawns = achs.reduce((s, a) => s + a.rewardSpawns, 0);
+        const names = achs.map(a => `${a.icon}${a.title}`).join('、');
+        toasts.push(`解锁 ${achs.length} 个成就！\n${names}\n+${totalSpawns} 下局道具`);
+      }
+    }
+
+    // ── Toast 1: missions (merged, with all-done suffix if applicable) ──
+    const missions = DailyMissionManager.lastSessionCompleted;
+    if (missions.length > 0) {
+      const completedCount = DailyMissionManager.instance?.completedCount ?? 0;
+      const allDone        = DailyMissionManager.instance?.allCompleted ?? false;
+      if (missions.length === 1) {
+        const m = missions[0];
+        const suffix = allDone ? '\n今日任务全部完成！🎁 下局获得额外道具！' : `\n今日进度 ${completedCount}/3`;
+        toasts.push(`任务完成！✅\n${m.description}${suffix}`);
+      } else {
+        const names  = missions.map(m => m.description).join('\n');
+        const suffix = allDone ? '\n今日任务全部完成！🎁 下局获得额外道具！' : `\n今日进度 ${completedCount}/3`;
+        toasts.push(`完成 ${missions.length} 个任务！✅\n${names}${suffix}`);
+      }
+    }
+
+    if (toasts.length === 0) return;
+
+    toasts.forEach((text, idx) => {
+      this.scheduleOnce(() => {
+        if (this.isValid) this._showUnlockToast(text);
+      }, idx * 2.2);
+    });
+  }
+
+  /**
+   * Display a single unlock toast on `unlockToastNode`.
+   * Uses a scale-in + hold + scale-out tween sequence.
+   */
+  private _showUnlockToast(text: string): void {
+    if (!this.unlockToastNode) return;
+
+    // Update label text
+    const label = this.unlockToastNode.getComponentInChildren(Label);
+    if (label) label.string = text;
+
+    // Animate: hidden → scale-in → hold → scale-out
+    this.unlockToastNode.active = true;
+    this.unlockToastNode.setScale(this._v0);
+
+    tween(this.unlockToastNode)
+      .to(0.20, { scale: this._v1_2 }, { easing: 'backOut' })
+      .to(0.08, { scale: this._v1_0 })
+      .delay(1.8)
+      .to(0.18, { scale: this._v0 })
+      .call(() => { if (this.unlockToastNode) this.unlockToastNode.active = false; })
+      .start();
   }
 
   private _onShare(): void {
