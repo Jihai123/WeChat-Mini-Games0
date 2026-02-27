@@ -12,10 +12,16 @@ export type AnalyticsEventName =
   | 'share_clicked'        // Player tapped the share button (always voluntary)
   | 'ad_shown'             // Rewarded or banner ad became visible
   | 'ad_reward_granted'    // Player watched full rewarded video → reward given
-  | 'ad_reward_denied'     // Player closed rewarded video early → no reward
-  | 'high_score_beaten'    // Player beat their personal best mid-session
-  | 'ftue_complete'        // FTUE tutorial flow finished
-  | 'retry_clicked';       // Player tapped Retry (direct, without ad)
+  | 'ad_reward_denied'         // Player closed rewarded video early → no reward
+  | 'interstitial_shown'       // Interstitial ad displayed at round break
+  | 'high_score_beaten'        // Player beat their personal best mid-session
+  | 'ftue_complete'            // FTUE tutorial flow finished
+  | 'retry_clicked'            // Player tapped Retry (direct, without ad)
+  | 'score_doubled'            // Player watched ad and doubled their score
+  | 'daily_reward_claimed'     // Player claimed the free daily bonus
+  | 'daily_ad_bonus_claimed'   // Player watched ad for extra daily bonus spawns
+  | 'pre_round_bonus_accepted' // Player watched ad for pre-round bonus spawns
+  | 'leaderboard_viewed';      // Player opened the friend leaderboard
 
 export interface IAnalyticsEvent {
   eventName: AnalyticsEventName;

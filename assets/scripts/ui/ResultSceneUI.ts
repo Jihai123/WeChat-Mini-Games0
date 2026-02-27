@@ -7,8 +7,11 @@ import { GameManager } from '../core/GameManager';
 import { WeChatService } from '../services/WeChatService';
 import { AnalyticsService } from '../services/AnalyticsService';
 import { AdManager, AdRewardResult } from '../services/AdManager';
+import { AdPlacementManager } from '../monetization/AdPlacementManager';
 import { ResultSceneBinder } from '../bindings/SceneBinder';
 import { ISessionResult } from '../interfaces/IScoreData';
+import { EventBus, GameEvents } from '../utils/EventBus';
+import { STORAGE_KEYS } from '../data/GameConfig';
 
 const { ccclass, property } = _decorator;
 
@@ -84,6 +87,16 @@ export class ResultSceneUI extends Component {
   @property(Button) btnShare:        Button | null = null;
   @property(Button) btnHome:         Button | null = null;
 
+  /**
+   * Optional score-doubler button.
+   * Label MUST read "Watch Ad to Double Score" (or similar).
+   * Hidden after the ad is watched or if score is 0.
+   */
+  @property(Button) btnDoubleScore:  Button | null = null;
+
+  /** Status text next to the doubler button ("Tap to double your score!", etc.) */
+  @property(Label)  doubleScoreStatusLabel: Label | null = null;
+
   // ----- Feedback nodes -----
   @property(Node) nearMissBanner:    Node | null = null;
   @property(Node) newHighScoreFX:    Node | null = null;
@@ -132,6 +145,7 @@ export class ResultSceneUI extends Component {
   onDestroy(): void {
     this.btnRetry?.node.off(Button.EventType.CLICK,        this._onRetry,        this);
     this.btnWatchAdRetry?.node.off(Button.EventType.CLICK, this._onWatchAdRetry, this);
+    this.btnDoubleScore?.node.off(Button.EventType.CLICK,  this._onDoubleScore,  this);
     this.btnShare?.node.off(Button.EventType.CLICK,        this._onShare,        this);
     this.btnHome?.node.off(Button.EventType.CLICK,         this._onHome,         this);
   }
@@ -264,6 +278,7 @@ export class ResultSceneUI extends Component {
   private _wireButtons(): void {
     this.btnRetry?.node.on(Button.EventType.CLICK,        this._onRetry,        this);
     this.btnWatchAdRetry?.node.on(Button.EventType.CLICK, this._onWatchAdRetry, this);
+    this.btnDoubleScore?.node.on(Button.EventType.CLICK,  this._onDoubleScore,  this);
     this.btnShare?.node.on(Button.EventType.CLICK,        this._onShare,        this);
     this.btnHome?.node.on(Button.EventType.CLICK,         this._onHome,         this);
 
@@ -279,6 +294,24 @@ export class ResultSceneUI extends Component {
         }
       }, 1.5);
     }
+
+    // Score doubler: hide initially, reveal after count-up completes (1.2 s + 0.3 s buffer).
+    // Only shown if score > 0 and the doubler hasn't been used this round.
+    const result = GameManager.lastSessionResult;
+    if (this.btnDoubleScore) {
+      const eligible = (result?.scoreData.currentScore ?? 0) > 0 && AdPlacementManager.scoreDoublerAvailable;
+      this.btnDoubleScore.node.active = false;
+      if (eligible) {
+        this.scheduleOnce(() => {
+          if (this.btnDoubleScore && AdPlacementManager.scoreDoublerAvailable) {
+            this.btnDoubleScore.node.active = true;
+            if (this.doubleScoreStatusLabel) {
+              this.doubleScoreStatusLabel.string = '广告看完可获得双倍分！';
+            }
+          }
+        }, COUNT_UP_DURATION_S + 0.5);
+      }
+    }
   }
 
   // ------------------------------------------------------------------
@@ -287,7 +320,7 @@ export class ResultSceneUI extends Component {
 
   private _onRetry(): void {
     AnalyticsService.instance?.track('retry_clicked', { withAd: false });
-    this._safeLoadScene(SceneNames.GAME);
+    void this._safeLoadScene(SceneNames.GAME);
   }
 
   /**
@@ -316,7 +349,7 @@ export class ResultSceneUI extends Component {
     if (result === AdRewardResult.GRANTED) {
       // Full ad watched — proceed to game
       AnalyticsService.instance?.track('retry_clicked', { withAd: true });
-      this._safeLoadScene(SceneNames.GAME);
+      void this._safeLoadScene(SceneNames.GAME);
 
     } else if (result === AdRewardResult.SKIPPED) {
       // Player closed early — inform gently, do NOT navigate (WeChat policy)
@@ -330,7 +363,78 @@ export class ResultSceneUI extends Component {
       if (this.adRetryStatusLabel) {
         this.adRetryStatusLabel.string = 'Ad unavailable — starting game';
       }
-      this.scheduleOnce(() => this._safeLoadScene(SceneNames.GAME), 0.8);
+      this.scheduleOnce(() => void this._safeLoadScene(SceneNames.GAME), 0.8);
+    }
+  }
+
+  /**
+   * Score doubler flow — watch a full rewarded video to multiply the saved score by 2.
+   *
+   * WeChat review checklist:
+   *  ✅ Only called on explicit user tap
+   *  ✅ Never granted on SKIPPED (res.isEnded strictly enforced in AdManager)
+   *  ✅ Does not prevent the player from proceeding without watching
+   *  ✅ Button hidden after first use (once per round)
+   */
+  private async _onDoubleScore(): Promise<void> {
+    if (!AdPlacementManager.scoreDoublerAvailable || this._adInFlight) return;
+
+    this._adInFlight = true;
+    if (this.btnDoubleScore) this.btnDoubleScore.interactable = false;
+    if (this.doubleScoreStatusLabel) this.doubleScoreStatusLabel.string = '广告加载中…';
+
+    const result = await AdManager.instance?.showRewardedAd('score_double')
+      ?? AdRewardResult.UNAVAILABLE;
+
+    if (!this.isValid) return;
+    this._adInFlight = false;
+
+    if (result === AdRewardResult.GRANTED) {
+      AdPlacementManager.markScoreDoublerUsed();
+      this._applyScoreDouble();
+    } else if (result === AdRewardResult.SKIPPED) {
+      if (this.btnDoubleScore) this.btnDoubleScore.interactable = true;
+      if (this.doubleScoreStatusLabel) this.doubleScoreStatusLabel.string = '看完广告才能获得双倍！';
+    } else {
+      // Ad unavailable — hide the button so it doesn't frustrate the player
+      if (this.btnDoubleScore) this.btnDoubleScore.node.active = false;
+    }
+  }
+
+  /** Multiply the current session score by 2, re-animate the counter, update storage. */
+  private _applyScoreDouble(): void {
+    const sr = GameManager.lastSessionResult;
+    if (!sr) return;
+
+    const original = sr.scoreData.currentScore;
+    const doubled  = original * 2;
+
+    sr.scoreData.currentScore = doubled;
+
+    // Update high score if the doubled value beats the stored record
+    if (doubled > sr.scoreData.highScore) {
+      sr.scoreData.highScore = doubled;
+      sr.isNewHighScore      = true;
+      WeChatService.instance?.saveToStorage(STORAGE_KEYS.HIGH_SCORE, doubled);
+
+      if (this.highScoreLabel) {
+        this.highScoreLabel.string = `Best: ${doubled.toLocaleString()}`;
+      }
+    }
+
+    // Re-animate count-up with the doubled figure
+    EventBus.emit(GameEvents.SCORE_DOUBLED, { original, doubled });
+    this._animateCountUp(doubled);
+
+    // Hide doubler button — consumed
+    if (this.btnDoubleScore)       this.btnDoubleScore.node.active = false;
+    if (this.doubleScoreStatusLabel) this.doubleScoreStatusLabel.string = '';
+
+    AnalyticsService.instance?.track('score_doubled', { original, doubled });
+
+    // Celebrate if this is now a new high score
+    if (sr.isNewHighScore) {
+      this.scheduleOnce(() => this._celebrateNewHighScore(), COUNT_UP_DURATION_S + 0.1);
     }
   }
 
@@ -347,7 +451,7 @@ export class ResultSceneUI extends Component {
   }
 
   private _onHome(): void {
-    this._safeLoadScene(SceneNames.MAIN);
+    void this._safeLoadScene(SceneNames.MAIN);
   }
 
   // ------------------------------------------------------------------
@@ -374,10 +478,18 @@ export class ResultSceneUI extends Component {
   }
 
   /**
-   * Scene transition with error boundary.
+   * Scene transition with interstitial gate + error boundary.
+   * If navigating to GameScene and an interstitial is due, shows it first.
    * Notifies ResultSceneBinder to start the timeout watchdog and destroy the banner.
    */
-  private _safeLoadScene(sceneName: string): void {
+  private async _safeLoadScene(sceneName: string): Promise<void> {
+    // Show interstitial at natural break (result → retry) if one is due.
+    // Only gated for game-scene navigation — never on Home.
+    if (sceneName === SceneNames.GAME) {
+      await AdPlacementManager.instance?.showInterstitialIfDue();
+      if (!this.isValid) return; // Scene may have been unloaded during interstitial
+    }
+
     this._binder?.beginSceneTransition(sceneName);
     try {
       director.loadScene(sceneName, (err) => {

@@ -12,6 +12,9 @@ import { ObjectSpawner } from '../gameplay/ObjectSpawner';
 import { AnalyticsService } from '../services/AnalyticsService';
 import { WeChatService } from '../services/WeChatService';
 import { PrivacyManager } from '../services/PrivacyManager';
+import { DailyRewardManager } from '../monetization/DailyRewardManager';
+import { AdPlacementManager } from '../monetization/AdPlacementManager';
+import { LeaderboardService } from '../social/LeaderboardService';
 import {
   DEFAULT_GAME_CONFIG,
   STORAGE_KEYS,
@@ -62,11 +65,12 @@ export class GameManager extends Component {
   // Internal state
   // ------------------------------------------------------------------
 
-  private _state:        GameState = GameState.IDLE;
-  private _sessionId:    string    = '';
-  private _totalTime:    number    = DEFAULT_GAME_CONFIG.sessionDurationSeconds;
-  private _timeLeft:     number    = 0;
-  private _diffIdx:      number    = 0; // index into difficultyLevels[]
+  private _state:               GameState = GameState.IDLE;
+  private _sessionId:           string    = '';
+  private _totalTime:           number    = DEFAULT_GAME_CONFIG.sessionDurationSeconds;
+  private _timeLeft:            number    = 0;
+  private _diffIdx:             number    = 0; // index into difficultyLevels[]
+  private _pendingBonusSpawns:  number    = 0; // bonus spawns from DailyRewardManager to inject
 
   static get instance(): GameManager | null { return GameManager._instance; }
   get state():   GameState { return this._state; }
@@ -136,6 +140,9 @@ export class GameManager extends Component {
     this._sessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this._diffIdx   = 0;
 
+    // Count this as a new round for ad placement gating
+    AdPlacementManager.recordRoundStart();
+
     // Load persisted player data (or create defaults for first-time player)
     let playerData = WeChatService.instance?.loadFromStorage<IPlayerData>(STORAGE_KEYS.PLAYER_DATA);
     if (!playerData) {
@@ -185,11 +192,16 @@ export class GameManager extends Component {
     const difficulty = DEFAULT_GAME_CONFIG.difficultyLevels[0];
     this.objectSpawner?.init(isFTUE, difficulty);
 
+    // Consume bonus spawns from DailyRewardManager (claimed on main menu).
+    // They will be injected as staggered FORCE_BONUS_SPAWN events in _onEnterPlaying.
+    this._pendingBonusSpawns = DailyRewardManager.consumePendingSpawns();
+
     // sessionId omitted from params — it is a pseudonymous ID and logging it
     // in event params may create a cross-session tracking vector (MED-04)
     AnalyticsService.instance?.track('session_start', {
-      isFTUE:      isFTUE,
-      gamesPlayed: playerData.totalGamesPlayed,
+      isFTUE:       isFTUE,
+      gamesPlayed:  playerData.totalGamesPlayed,
+      bonusSpawns:  this._pendingBonusSpawns,
     });
 
     // Short artificial delay so the loading UI can display
@@ -202,6 +214,20 @@ export class GameManager extends Component {
     this._timeLeft  = this._totalTime;
     this.hookController?.reset();
     this.hookController?.setInputEnabled(true);
+
+    // Inject daily-bonus spawns as staggered FORCE_BONUS_SPAWN events.
+    // First spawn at 3s (let the player see the round start), then every 4s.
+    // Guard: only emit if still in PLAYING state (not paused/ended).
+    if (this._pendingBonusSpawns > 0) {
+      for (let i = 0; i < this._pendingBonusSpawns; i++) {
+        this.scheduleOnce(() => {
+          if (this._state === GameState.PLAYING) {
+            EventBus.emit(GameEvents.FORCE_BONUS_SPAWN, undefined);
+          }
+        }, 3.0 + i * 4.0);
+      }
+      this._pendingBonusSpawns = 0;
+    }
   }
 
   // ---------- PAUSED ----------
@@ -249,6 +275,13 @@ export class GameManager extends Component {
       durationMs:  result.scoreData.sessionDurationMs,
     });
     AnalyticsService.instance?.flush();
+
+    // Post score to WeChat cloud storage for the leaderboard (non-blocking)
+    LeaderboardService.instance?.postScore(
+      result.scoreData.currentScore,
+      pd.displayName,
+      pd.avatarUrl,
+    );
 
     EventBus.emit(GameEvents.SESSION_END, result.scoreData);
 

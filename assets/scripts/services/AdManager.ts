@@ -9,11 +9,9 @@ const { ccclass, property } = _decorator;
 // ⚠️  Replace with real ad unit IDs from WeChat MP → Monetisation → Ad Units BEFORE submission.
 // Using placeholder values will cause ad load failures and may trigger review rejection.
 // ---------------------------------------------------------------------------
-const REWARDED_VIDEO_AD_UNIT_ID = '';
-const BANNER_AD_UNIT_ID         = '';
-
-/** Kill-switch: ads are only initialised when both IDs have been populated. */
-const ADS_ENABLED = REWARDED_VIDEO_AD_UNIT_ID !== '' && BANNER_AD_UNIT_ID !== '';
+const REWARDED_VIDEO_AD_UNIT_ID = '';  // wx.RewardedVideoAd
+const BANNER_AD_UNIT_ID         = '';  // wx.BannerAd
+const INTERSTITIAL_AD_UNIT_ID   = '';  // wx.InterstitialAd (shown at round breaks)
 
 // After an ad error, wait this many seconds before allowing another load attempt.
 const ERROR_COOLDOWN_S = 30;
@@ -90,6 +88,13 @@ export class AdManager extends Component {
   private _bannerVisible:  boolean   = false;
   private _systemInfo:     { windowWidth: number; windowHeight: number } | null = null;
 
+  // ---------------------------------------------------------------------------
+  // Interstitial internals
+  // ---------------------------------------------------------------------------
+  private _interstitialAd:      any     = null; // wx.InterstitialAd instance
+  private _interstitialReady:   boolean = false;
+  private _interstitialResolve: (() => void) | null = null;
+
   static get instance(): AdManager | null { return AdManager._instance; }
 
   // ---------------------------------------------------------------------------
@@ -109,6 +114,7 @@ export class AdManager extends Component {
         fail: () => { /* use default sizing */ },
       });
       this._initRewardedAd();
+      this._initInterstitialAd();
     }
   }
 
@@ -117,6 +123,7 @@ export class AdManager extends Component {
     this._destroyed = true;
     this._destroyRewardedAd();
     this.destroyBanner();
+    this._destroyInterstitialAd();
   }
 
   update(dt: number): void {
@@ -276,6 +283,41 @@ export class AdManager extends Component {
   }
 
   // ---------------------------------------------------------------------------
+  // Interstitial — Public API
+  // ---------------------------------------------------------------------------
+
+  /** Whether an interstitial ad is loaded and ready to display. */
+  get isInterstitialReady(): boolean { return this._interstitialReady; }
+
+  /**
+   * Show the interstitial ad.
+   * Resolves when the player closes the ad (or immediately if unavailable).
+   *
+   * IMPORTANT (WeChat review): only show at a natural game break — never
+   * during gameplay or on app launch.  AdPlacementManager.showInterstitialIfDue()
+   * enforces the every-N-rounds gate.
+   */
+  showInterstitialAd(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      if (!this._isWxEnv || !this._interstitialAd || !this._interstitialReady) {
+        resolve();
+        return;
+      }
+
+      this._interstitialReady   = false;
+      this._interstitialResolve = resolve;
+
+      AnalyticsService.instance?.track('ad_shown', { type: 'interstitial' });
+
+      this._interstitialAd.show().catch((err: any) => {
+        console.warn('[AdManager] Interstitial show failed:', err);
+        this._interstitialResolve?.();
+        this._interstitialResolve = null;
+      });
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // Rewarded video — Private
   // ---------------------------------------------------------------------------
 
@@ -381,5 +423,53 @@ export class AdManager extends Component {
       this._pendingResolve(AdRewardResult.UNAVAILABLE);
       this._pendingResolve = null;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Interstitial — Private
+  // ---------------------------------------------------------------------------
+
+  private _initInterstitialAd(): void {
+    if (!this._isWxEnv || !INTERSTITIAL_AD_UNIT_ID || this._interstitialAd) return;
+
+    try {
+      this._interstitialAd = wx.createInterstitialAd({ adUnitId: INTERSTITIAL_AD_UNIT_ID });
+
+      this._interstitialAd.onLoad(() => {
+        this._interstitialReady = true;
+        console.log('[AdManager] Interstitial ad loaded and ready.');
+      });
+
+      this._interstitialAd.onError((err: any) => {
+        console.warn('[AdManager] Interstitial error:', err);
+        this._interstitialReady = false;
+        // Resolve any waiting caller so the game is never blocked
+        this._interstitialResolve?.();
+        this._interstitialResolve = null;
+        // Retry load after a short delay
+        this.scheduleOnce(() => this._interstitialAd?.load?.(), 30);
+      });
+
+      this._interstitialAd.onClose(() => {
+        this._interstitialReady = false;
+        // Notify awaiting caller that the ad has been dismissed
+        this._interstitialResolve?.();
+        this._interstitialResolve = null;
+        // Pre-load for the next round
+        this._interstitialAd?.load?.();
+      });
+
+      this._interstitialAd.load();
+    } catch (e) {
+      console.warn('[AdManager] createInterstitialAd failed:', e);
+    }
+  }
+
+  private _destroyInterstitialAd(): void {
+    // Resolve any pending promise so callers don't hang on scene unload
+    this._interstitialResolve?.();
+    this._interstitialResolve = null;
+    this._interstitialAd      = null;
+    this._interstitialReady   = false;
   }
 }
