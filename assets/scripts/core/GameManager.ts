@@ -15,6 +15,8 @@ import { PrivacyManager } from '../services/PrivacyManager';
 import { DailyRewardManager } from '../monetization/DailyRewardManager';
 import { AdPlacementManager } from '../monetization/AdPlacementManager';
 import { LeaderboardService } from '../social/LeaderboardService';
+import { AchievementManager } from '../retention/AchievementManager';
+import { DailyMissionManager } from '../retention/DailyMissionManager';
 import {
   DEFAULT_GAME_CONFIG,
   STORAGE_KEYS,
@@ -266,6 +268,59 @@ export class GameManager extends Component {
     pd.lastPlayedTimestamp = Date.now();
     if (result.isNewHighScore) pd.highScore = result.scoreData.currentScore;
     WeChatService.instance?.saveToStorage(STORAGE_KEYS.PLAYER_DATA, pd);
+
+    // ── Achievements ────────────────────────────────────────────────
+    // Check and surface newly-unlocked achievements.
+    // streakDays comes from DailyRewardManager state (already persisted).
+    const streakDays     = DailyRewardManager.instance?.getState().streakDays ?? 0;
+    const newAchievements = AchievementManager.instance?.checkSession(
+      result.scoreData.objectsCaught,
+      result.scoreData.maxComboReached,
+      result.scoreData.currentScore,
+      pd.totalGamesPlayed,   // already incremented above
+      streakDays,
+    ) ?? [];
+    AchievementManager.lastSessionUnlocked = newAchievements;
+
+    // ── Daily Missions ───────────────────────────────────────────────
+    const newMissions = DailyMissionManager.instance?.checkSession(
+      result.scoreData.objectsCaught,
+      result.scoreData.maxComboReached,
+      result.scoreData.currentScore,
+      result.isNewHighScore,
+    ) ?? [];
+    DailyMissionManager.lastSessionCompleted = newMissions;
+
+    // ── Bonus Spawns from achievements + missions ───────────────────
+    let bonusFromRetention = 0;
+    for (const ach of newAchievements) {
+      bonusFromRetention += ach.rewardSpawns;
+      AnalyticsService.instance?.track('achievement_unlocked', {
+        achievementId: ach.id,
+        title: ach.title,
+      });
+    }
+    // Collect mission tier rewards (prevents double-counting on re-launch)
+    const missionBonus = DailyMissionManager.instance?.collectNewTierRewards() ?? 0;
+    bonusFromRetention += missionBonus;
+    if (newMissions.length > 0) {
+      for (const m of newMissions) {
+        AnalyticsService.instance?.track('mission_completed', {
+          missionType: m.type,
+          target: m.target,
+        });
+      }
+      if (DailyMissionManager.instance?.allCompleted) {
+        AnalyticsService.instance?.track('all_missions_completed', {
+          bonusSpawns: missionBonus,
+        });
+        EventBus.emit(GameEvents.ALL_MISSIONS_DONE, { bonusSpawns: missionBonus });
+      }
+    }
+    if (bonusFromRetention > 0) {
+      DailyRewardManager.pendingBonusSpawns += bonusFromRetention;
+    }
+    // ────────────────────────────────────────────────────────────────
 
     AnalyticsService.instance?.track('session_end', {
       score:       result.scoreData.currentScore,

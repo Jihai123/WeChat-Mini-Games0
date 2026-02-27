@@ -10,6 +10,8 @@ import { AdManager, AdRewardResult } from '../services/AdManager';
 import { AdPlacementManager } from '../monetization/AdPlacementManager';
 import { ResultSceneBinder } from '../bindings/SceneBinder';
 import { ISessionResult } from '../interfaces/IScoreData';
+import { AchievementManager } from '../retention/AchievementManager';
+import { DailyMissionManager } from '../retention/DailyMissionManager';
 
 const { ccclass, property } = _decorator;
 
@@ -86,6 +88,13 @@ export class ResultSceneUI extends Component {
   @property(Button) btnHome:         Button | null = null;
 
   /**
+   * Optional toast node for achievement/mission unlock notifications.
+   * If null the feature silently degrades — data is still tracked.
+   * Expects a child Label named 'ToastLabel' (or any Label component).
+   */
+  @property(Node) unlockToastNode:   Node  | null = null;
+
+  /**
    * Score-doubler button node reference.
    * Force-hidden in V1 (ships in V2 after approval).
    * Node kept so Inspector wiring is preserved across deploys.
@@ -135,6 +144,9 @@ export class ResultSceneUI extends Component {
     this._populateStats(result);
     this._runEntranceAnimation(result);
     // _updateAdButtonStatus() is called inside _wireButtons() after a 1.5 s delay
+
+    // Schedule achievement + mission unlock toasts after the score count-up finishes
+    this.scheduleOnce(() => this._showPendingUnlocks(), COUNT_UP_DURATION_S + 0.8);
   }
 
   onDestroy(): void {
@@ -348,6 +360,82 @@ export class ResultSceneUI extends Component {
       }
       this.scheduleOnce(() => void this._safeLoadScene(SceneNames.GAME), 0.8);
     }
+  }
+
+  // ------------------------------------------------------------------
+  // Achievement & mission unlock notifications
+  // ------------------------------------------------------------------
+
+  /**
+   * Build and play a queue of unlock toast messages.
+   * Achievements fire first, then mission completions, one every 2.2 s.
+   * Each toast scales in, holds, then fades — giving the player a clear
+   * moment to read the reward before the next one appears.
+   *
+   * If `unlockToastNode` is not wired in the Inspector the feature degrades
+   * gracefully (notifications are skipped, data is already saved by GameManager).
+   */
+  private _showPendingUnlocks(): void {
+    if (!this.isValid) return;
+
+    const queue: Array<{ icon: string; text: string }> = [];
+
+    // Achievement unlocks
+    for (const ach of AchievementManager.lastSessionUnlocked) {
+      queue.push({
+        icon: ach.icon,
+        text: `成就解锁！${ach.icon} ${ach.title}\n${ach.description}\n+${ach.rewardSpawns} 下局道具`,
+      });
+    }
+    // Daily mission completions
+    for (const m of DailyMissionManager.lastSessionCompleted) {
+      const completedCount = DailyMissionManager.instance?.completedCount ?? 0;
+      queue.push({
+        icon: '✅',
+        text: `任务完成！✅\n${m.description}\n今日进度 ${completedCount}/3`,
+      });
+    }
+    // All-missions bonus notification
+    if (DailyMissionManager.instance?.allCompleted &&
+        DailyMissionManager.lastSessionCompleted.length > 0) {
+      queue.push({
+        icon: '🎁',
+        text: '今日任务全部完成！🎁\n下局获得额外奖励道具！',
+      });
+    }
+
+    if (queue.length === 0) return;
+
+    // Show each toast with a 2.2 s gap
+    queue.forEach((item, idx) => {
+      this.scheduleOnce(() => {
+        if (this.isValid) this._showUnlockToast(item.text);
+      }, idx * 2.2);
+    });
+  }
+
+  /**
+   * Display a single unlock toast on `unlockToastNode`.
+   * Uses a scale-in + hold + scale-out tween sequence.
+   */
+  private _showUnlockToast(text: string): void {
+    if (!this.unlockToastNode) return;
+
+    // Update label text
+    const label = this.unlockToastNode.getComponentInChildren(Label);
+    if (label) label.string = text;
+
+    // Animate: hidden → scale-in → hold → scale-out
+    this.unlockToastNode.active = true;
+    this.unlockToastNode.setScale(this._v0);
+
+    tween(this.unlockToastNode)
+      .to(0.20, { scale: this._v1_2 }, { easing: 'backOut' })
+      .to(0.08, { scale: this._v1_0 })
+      .delay(1.8)
+      .to(0.18, { scale: this._v0 })
+      .call(() => { if (this.unlockToastNode) this.unlockToastNode.active = false; })
+      .start();
   }
 
   private _onShare(): void {

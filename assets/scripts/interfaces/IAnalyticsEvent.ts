@@ -23,7 +23,10 @@ export type AnalyticsEventName =
   | 'pre_round_bonus_accepted' // Player watched ad for pre-round bonus spawns
   | 'leaderboard_viewed'       // Player opened the friend leaderboard
   | 'rewarded_btn_shown'       // Ad-retry button became visible (CTR denominator)
-  | 'banner_shown';            // Banner ad impression logged (placement tagged)
+  | 'banner_shown'             // Banner ad impression logged (placement tagged)
+  | 'achievement_unlocked'     // Achievement unlocked (id, title)
+  | 'mission_completed'        // Daily mission completed (type, target)
+  | 'all_missions_completed';  // All 3 daily missions done (bonusSpawns awarded)
 
 export interface IAnalyticsEvent {
   eventName: AnalyticsEventName;
