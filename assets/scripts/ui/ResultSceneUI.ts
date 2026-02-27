@@ -10,8 +10,6 @@ import { AdManager, AdRewardResult } from '../services/AdManager';
 import { AdPlacementManager } from '../monetization/AdPlacementManager';
 import { ResultSceneBinder } from '../bindings/SceneBinder';
 import { ISessionResult } from '../interfaces/IScoreData';
-import { EventBus, GameEvents } from '../utils/EventBus';
-import { STORAGE_KEYS } from '../data/GameConfig';
 
 const { ccclass, property } = _decorator;
 
@@ -88,14 +86,11 @@ export class ResultSceneUI extends Component {
   @property(Button) btnHome:         Button | null = null;
 
   /**
-   * Optional score-doubler button.
-   * Label MUST read "Watch Ad to Double Score" (or similar).
-   * Hidden after the ad is watched or if score is 0.
+   * Score-doubler button node reference.
+   * Force-hidden in V1 (ships in V2 after approval).
+   * Node kept so Inspector wiring is preserved across deploys.
    */
   @property(Button) btnDoubleScore:  Button | null = null;
-
-  /** Status text next to the doubler button ("Tap to double your score!", etc.) */
-  @property(Label)  doubleScoreStatusLabel: Label | null = null;
 
   // ----- Feedback nodes -----
   @property(Node) nearMissBanner:    Node | null = null;
@@ -145,7 +140,7 @@ export class ResultSceneUI extends Component {
   onDestroy(): void {
     this.btnRetry?.node.off(Button.EventType.CLICK,        this._onRetry,        this);
     this.btnWatchAdRetry?.node.off(Button.EventType.CLICK, this._onWatchAdRetry, this);
-    this.btnDoubleScore?.node.off(Button.EventType.CLICK,  this._onDoubleScore,  this);
+    // btnDoubleScore: V2 feature — not wired in V1
     this.btnShare?.node.off(Button.EventType.CLICK,        this._onShare,        this);
     this.btnHome?.node.off(Button.EventType.CLICK,         this._onHome,         this);
   }
@@ -278,7 +273,7 @@ export class ResultSceneUI extends Component {
   private _wireButtons(): void {
     this.btnRetry?.node.on(Button.EventType.CLICK,        this._onRetry,        this);
     this.btnWatchAdRetry?.node.on(Button.EventType.CLICK, this._onWatchAdRetry, this);
-    this.btnDoubleScore?.node.on(Button.EventType.CLICK,  this._onDoubleScore,  this);
+    // btnDoubleScore: V2 feature — not wired in V1 (changes final score via ad, PM constraint)
     this.btnShare?.node.on(Button.EventType.CLICK,        this._onShare,        this);
     this.btnHome?.node.on(Button.EventType.CLICK,         this._onHome,         this);
 
@@ -291,27 +286,15 @@ export class ResultSceneUI extends Component {
         if (this.btnWatchAdRetry) {
           this.btnWatchAdRetry.node.active = true;
           this._updateAdButtonStatus();
+          // Track impression so we can calculate rewarded-retry CTR:
+          // CTR = ad_reward_granted(source=retry_bonus) / rewarded_btn_shown
+          AnalyticsService.instance?.track('rewarded_btn_shown', { placement: 'retry_bonus' });
         }
       }, 1.5);
     }
 
-    // Score doubler: hide initially, reveal after count-up completes (1.2 s + 0.3 s buffer).
-    // Only shown if score > 0 and the doubler hasn't been used this round.
-    const result = GameManager.lastSessionResult;
-    if (this.btnDoubleScore) {
-      const eligible = (result?.scoreData.currentScore ?? 0) > 0 && AdPlacementManager.scoreDoublerAvailable;
-      this.btnDoubleScore.node.active = false;
-      if (eligible) {
-        this.scheduleOnce(() => {
-          if (this.btnDoubleScore && AdPlacementManager.scoreDoublerAvailable) {
-            this.btnDoubleScore.node.active = true;
-            if (this.doubleScoreStatusLabel) {
-              this.doubleScoreStatusLabel.string = '广告看完可获得双倍分！';
-            }
-          }
-        }, COUNT_UP_DURATION_S + 0.5);
-      }
-    }
+    // btnDoubleScore: force-hidden in V1 — score doubler ships in V2
+    if (this.btnDoubleScore) this.btnDoubleScore.node.active = false;
   }
 
   // ------------------------------------------------------------------
@@ -354,87 +337,16 @@ export class ResultSceneUI extends Component {
     } else if (result === AdRewardResult.SKIPPED) {
       // Player closed early — inform gently, do NOT navigate (WeChat policy)
       if (this.adRetryStatusLabel) {
-        this.adRetryStatusLabel.string = 'Watch the full ad to play again';
+        this.adRetryStatusLabel.string = '看完广告才能再玩哦~';
       }
       this._setRetryButtonsEnabled(true);
 
     } else {
       // Ad unavailable — fall back to direct retry so player is never blocked
       if (this.adRetryStatusLabel) {
-        this.adRetryStatusLabel.string = 'Ad unavailable — starting game';
+        this.adRetryStatusLabel.string = '广告暂不可用，直接开始';
       }
       this.scheduleOnce(() => void this._safeLoadScene(SceneNames.GAME), 0.8);
-    }
-  }
-
-  /**
-   * Score doubler flow — watch a full rewarded video to multiply the saved score by 2.
-   *
-   * WeChat review checklist:
-   *  ✅ Only called on explicit user tap
-   *  ✅ Never granted on SKIPPED (res.isEnded strictly enforced in AdManager)
-   *  ✅ Does not prevent the player from proceeding without watching
-   *  ✅ Button hidden after first use (once per round)
-   */
-  private async _onDoubleScore(): Promise<void> {
-    if (!AdPlacementManager.scoreDoublerAvailable || this._adInFlight) return;
-
-    this._adInFlight = true;
-    if (this.btnDoubleScore) this.btnDoubleScore.interactable = false;
-    if (this.doubleScoreStatusLabel) this.doubleScoreStatusLabel.string = '广告加载中…';
-
-    const result = await AdManager.instance?.showRewardedAd('score_double')
-      ?? AdRewardResult.UNAVAILABLE;
-
-    if (!this.isValid) return;
-    this._adInFlight = false;
-
-    if (result === AdRewardResult.GRANTED) {
-      AdPlacementManager.markScoreDoublerUsed();
-      this._applyScoreDouble();
-    } else if (result === AdRewardResult.SKIPPED) {
-      if (this.btnDoubleScore) this.btnDoubleScore.interactable = true;
-      if (this.doubleScoreStatusLabel) this.doubleScoreStatusLabel.string = '看完广告才能获得双倍！';
-    } else {
-      // Ad unavailable — hide the button so it doesn't frustrate the player
-      if (this.btnDoubleScore) this.btnDoubleScore.node.active = false;
-    }
-  }
-
-  /** Multiply the current session score by 2, re-animate the counter, update storage. */
-  private _applyScoreDouble(): void {
-    const sr = GameManager.lastSessionResult;
-    if (!sr) return;
-
-    const original = sr.scoreData.currentScore;
-    const doubled  = original * 2;
-
-    sr.scoreData.currentScore = doubled;
-
-    // Update high score if the doubled value beats the stored record
-    if (doubled > sr.scoreData.highScore) {
-      sr.scoreData.highScore = doubled;
-      sr.isNewHighScore      = true;
-      WeChatService.instance?.saveToStorage(STORAGE_KEYS.HIGH_SCORE, doubled);
-
-      if (this.highScoreLabel) {
-        this.highScoreLabel.string = `Best: ${doubled.toLocaleString()}`;
-      }
-    }
-
-    // Re-animate count-up with the doubled figure
-    EventBus.emit(GameEvents.SCORE_DOUBLED, { original, doubled });
-    this._animateCountUp(doubled);
-
-    // Hide doubler button — consumed
-    if (this.btnDoubleScore)       this.btnDoubleScore.node.active = false;
-    if (this.doubleScoreStatusLabel) this.doubleScoreStatusLabel.string = '';
-
-    AnalyticsService.instance?.track('score_doubled', { original, doubled });
-
-    // Celebrate if this is now a new high score
-    if (sr.isNewHighScore) {
-      this.scheduleOnce(() => this._celebrateNewHighScore(), COUNT_UP_DURATION_S + 0.1);
     }
   }
 
@@ -468,12 +380,12 @@ export class ResultSceneUI extends Component {
   private _updateAdButtonStatus(): void {
     if (!this.adRetryStatusLabel || !this.btnWatchAdRetry) return;
     const ready = AdManager.instance?.isRewardedAdReady ?? false;
-    this.adRetryStatusLabel.string = ready ? '' : 'Loading ad…';
+    this.adRetryStatusLabel.string = ready ? '' : '广告加载中…';
     // Check again after 2 s in case the ad loads asynchronously
     this.scheduleOnce(() => {
       if (!this.adRetryStatusLabel || !this.btnWatchAdRetry) return;
       const isReady = AdManager.instance?.isRewardedAdReady ?? false;
-      this.adRetryStatusLabel.string = isReady ? '' : 'Ad unavailable';
+      this.adRetryStatusLabel.string = isReady ? '' : '广告暂不可用';
     }, 2.0);
   }
 

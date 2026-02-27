@@ -21,7 +21,9 @@ export type AnalyticsEventName =
   | 'daily_reward_claimed'     // Player claimed the free daily bonus
   | 'daily_ad_bonus_claimed'   // Player watched ad for extra daily bonus spawns
   | 'pre_round_bonus_accepted' // Player watched ad for pre-round bonus spawns
-  | 'leaderboard_viewed';      // Player opened the friend leaderboard
+  | 'leaderboard_viewed'       // Player opened the friend leaderboard
+  | 'rewarded_btn_shown'       // Ad-retry button became visible (CTR denominator)
+  | 'banner_shown';            // Banner ad impression logged (placement tagged)
 
 export interface IAnalyticsEvent {
   eventName: AnalyticsEventName;

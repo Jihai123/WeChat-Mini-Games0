@@ -13,6 +13,14 @@ const REWARDED_VIDEO_AD_UNIT_ID = '';  // wx.RewardedVideoAd
 const BANNER_AD_UNIT_ID         = '';  // wx.BannerAd
 const INTERSTITIAL_AD_UNIT_ID   = '';  // wx.InterstitialAd (shown at round breaks)
 
+// ---------------------------------------------------------------------------
+// V1 feature flags — flip to true AFTER WeChat review approval.
+// Interstitials carry higher review scrutiny on first submission; launching
+// them post-approval in V2 eliminates the risk of a stalled launch.
+// ---------------------------------------------------------------------------
+/** V1 kill-switch: set to true in V2 after review approval to enable interstitial placement. */
+const INTERSTITIAL_ENABLED = false;
+
 // After an ad error, wait this many seconds before allowing another load attempt.
 const ERROR_COOLDOWN_S = 30;
 
@@ -114,7 +122,7 @@ export class AdManager extends Component {
         fail: () => { /* use default sizing */ },
       });
       this._initRewardedAd();
-      this._initInterstitialAd();
+      if (INTERSTITIAL_ENABLED) this._initInterstitialAd(); // V2 only
     }
   }
 
@@ -286,8 +294,11 @@ export class AdManager extends Component {
   // Interstitial — Public API
   // ---------------------------------------------------------------------------
 
-  /** Whether an interstitial ad is loaded and ready to display. */
-  get isInterstitialReady(): boolean { return this._interstitialReady; }
+  /**
+   * Whether an interstitial ad is loaded and ready to display.
+   * Always false when INTERSTITIAL_ENABLED = false (V1 mode).
+   */
+  get isInterstitialReady(): boolean { return INTERSTITIAL_ENABLED && this._interstitialReady; }
 
   /**
    * Show the interstitial ad.

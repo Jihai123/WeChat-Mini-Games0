@@ -19,6 +19,13 @@ const { ccclass, property } = _decorator;
 const PLAY_BUTTON_TIMEOUT_MS = 8_000;
 
 /**
+ * V1 kill-switch: daily ad-bonus tier (watch ad for extra spawns) is disabled
+ * until post-approval V2 rollout.  The free daily-claim tier remains active.
+ * Flip to `true` in V2 after WeChat review approves the rewarded ad placement.
+ */
+const V1_DAILY_AD_BONUS_ENABLED = false;
+
+/**
  * MainSceneUI — production main menu controller.
  *
  * Handles:
@@ -127,9 +134,12 @@ export class MainSceneUI extends Component {
 
     if (this.versionLabel) this.versionLabel.string = `v${this.versionString}`;
 
-    // Show banner ad after entrance animation completes
+    // Show banner ad after entrance animation completes, then track the impression
     if (this.enableBanner) {
-      this.scheduleOnce(() => AdManager.instance?.showBanner(), this.bannerDelaySeconds);
+      this.scheduleOnce(() => {
+        AdManager.instance?.showBanner();
+        AnalyticsService.instance?.track('banner_shown', { placement: 'main_menu' });
+      }, this.bannerDelaySeconds);
     }
 
     // Leaderboard panel starts hidden
@@ -210,9 +220,12 @@ export class MainSceneUI extends Component {
 
     const state = dr.getState();
 
+    // In V1 the ad-bonus tier is disabled; only the free-claim tier is active.
+    const adBonusAvailable = V1_DAILY_AD_BONUS_ENABLED && state.canClaimAdBonus;
+
     // Badge: visible when any claim is available
     if (this.dailyRewardBadge) {
-      this.dailyRewardBadge.active = state.canClaimFree || state.canClaimAdBonus;
+      this.dailyRewardBadge.active = state.canClaimFree || adBonusAvailable;
     }
 
     // Streak label
@@ -228,7 +241,7 @@ export class MainSceneUI extends Component {
       if (state.canClaimFree) {
         if (this.dailyRewardBtnLabel) this.dailyRewardBtnLabel.string = '领取每日奖励';
         this.btnDailyReward.interactable = true;
-      } else if (state.canClaimAdBonus) {
+      } else if (adBonusAvailable) {
         if (this.dailyRewardBtnLabel) this.dailyRewardBtnLabel.string = '看广告领加倍奖励';
         this.btnDailyReward.interactable = true;
       } else {
@@ -297,11 +310,11 @@ export class MainSceneUI extends Component {
     if (state.canClaimFree) {
       dr.claimDailyReward();
       this._populateDailyReward();
-      this._showRewardToast(`+${5} bonus spawns next round!`);
+      this._showRewardToast(`+5 个额外道具，下局生效！`);
       return;
     }
 
-    if (state.canClaimAdBonus) {
+    if (V1_DAILY_AD_BONUS_ENABLED && state.canClaimAdBonus) {
       if (this.btnDailyReward) this.btnDailyReward.interactable = false;
       if (this.dailyRewardBtnLabel) this.dailyRewardBtnLabel.string = '广告加载中…';
 
@@ -313,7 +326,7 @@ export class MainSceneUI extends Component {
       if (result === AdRewardResult.GRANTED) {
         dr.claimAdBonus();
         this._populateDailyReward();
-        this._showRewardToast('+5 bonus spawns unlocked!');
+        this._showRewardToast('+5 个额外道具，下局生效！');
         AnalyticsService.instance?.track('daily_ad_bonus_claimed', {});
       } else if (result === AdRewardResult.SKIPPED) {
         if (this.dailyRewardBtnLabel) this.dailyRewardBtnLabel.string = '看完广告才能领取！';
@@ -343,7 +356,7 @@ export class MainSceneUI extends Component {
       AdPlacementManager.markPreRoundOfferUsed();
       DailyRewardManager.pendingBonusSpawns += 5;
       if (this.preRoundBonusNode) this.preRoundBonusNode.active = false;
-      this._showRewardToast('Bonus round active!');
+      this._showRewardToast('额外道具已激活，下局生效！');
       EventBus.emit(GameEvents.PRE_ROUND_BONUS_ACTIVATED, { bonusSpawns: 5 });
       AnalyticsService.instance?.track('pre_round_bonus_accepted', {});
     } else if (result === AdRewardResult.SKIPPED) {
