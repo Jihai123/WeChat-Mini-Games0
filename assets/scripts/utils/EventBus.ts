@@ -28,8 +28,14 @@ export const GameEvents = {
   PAUSE_HIDE:         'PAUSE_HIDE',         // no payload
   SCENE_LOAD_START:   'SCENE_LOAD_START',   // payload: { sceneName: string }
   // --- FTUE progression ---
-  FTUE_STEP:          'FTUE_STEP',          // payload: { step: number, hint: string }
-  FTUE_COMPLETE:      'FTUE_COMPLETE',      // no payload
+  FTUE_STEP:                  'FTUE_STEP',                  // payload: { step: number, hint: string }
+  FTUE_COMPLETE:              'FTUE_COMPLETE',              // no payload
+  // --- Monetisation & Growth ---
+  DAILY_REWARD_CLAIMED:       'DAILY_REWARD_CLAIMED',       // payload: { streak, bonusSpawns, isAdBonus?: boolean }
+  SCORE_DOUBLED:              'SCORE_DOUBLED',              // payload: { original: number, doubled: number }
+  INTERSTITIAL_SHOWN:         'INTERSTITIAL_SHOWN',         // no payload
+  LEADERBOARD_OPEN:           'LEADERBOARD_OPEN',           // no payload
+  PRE_ROUND_BONUS_ACTIVATED:  'PRE_ROUND_BONUS_ACTIVATED',  // payload: { bonusSpawns: number }
 } as const;
 
 export type GameEventName = typeof GameEvents[keyof typeof GameEvents];

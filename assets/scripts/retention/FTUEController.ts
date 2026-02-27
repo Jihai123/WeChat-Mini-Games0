@@ -1,5 +1,5 @@
 import {
-  _decorator, Component, Node, Label, tween, Vec3, repeat,
+  _decorator, Component, Node, Label, tween, Vec3,
   Tween,
 } from 'cc';
 import { GameState } from '../enums/GameState';

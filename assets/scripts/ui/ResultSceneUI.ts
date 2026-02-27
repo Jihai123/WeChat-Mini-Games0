@@ -7,6 +7,7 @@ import { GameManager } from '../core/GameManager';
 import { WeChatService } from '../services/WeChatService';
 import { AnalyticsService } from '../services/AnalyticsService';
 import { AdManager, AdRewardResult } from '../services/AdManager';
+import { AdPlacementManager } from '../monetization/AdPlacementManager';
 import { ResultSceneBinder } from '../bindings/SceneBinder';
 import { ISessionResult } from '../interfaces/IScoreData';
 
@@ -84,6 +85,13 @@ export class ResultSceneUI extends Component {
   @property(Button) btnShare:        Button | null = null;
   @property(Button) btnHome:         Button | null = null;
 
+  /**
+   * Score-doubler button node reference.
+   * Force-hidden in V1 (ships in V2 after approval).
+   * Node kept so Inspector wiring is preserved across deploys.
+   */
+  @property(Button) btnDoubleScore:  Button | null = null;
+
   // ----- Feedback nodes -----
   @property(Node) nearMissBanner:    Node | null = null;
   @property(Node) newHighScoreFX:    Node | null = null;
@@ -96,6 +104,7 @@ export class ResultSceneUI extends Component {
   // ------------------------------------------------------------------
   private _binder: ResultSceneBinder | null = null;
   private _adInFlight: boolean = false;
+  private _countUpCb: ((dt: number) => void) | null = null;
 
   // Pre-allocated Vec3s to avoid GC in tween builders
   private readonly _v1_0  = new Vec3(1.0, 1.0, 1);
@@ -125,12 +134,13 @@ export class ResultSceneUI extends Component {
     this._wireButtons();
     this._populateStats(result);
     this._runEntranceAnimation(result);
-    this._updateAdButtonStatus();
+    // _updateAdButtonStatus() is called inside _wireButtons() after a 1.5 s delay
   }
 
   onDestroy(): void {
     this.btnRetry?.node.off(Button.EventType.CLICK,        this._onRetry,        this);
     this.btnWatchAdRetry?.node.off(Button.EventType.CLICK, this._onWatchAdRetry, this);
+    // btnDoubleScore: V2 feature — not wired in V1
     this.btnShare?.node.off(Button.EventType.CLICK,        this._onShare,        this);
     this.btnHome?.node.off(Button.EventType.CLICK,         this._onHome,         this);
   }
@@ -240,13 +250,20 @@ export class ResultSceneUI extends Component {
     let elapsed = 0;
     const label = this.finalScoreLabel;
 
-    this.schedule((dt: number) => {
+    // Use a stored reference so we can unschedule only this callback.
+    // unscheduleAllCallbacks() must NOT be used here — it would cancel the
+    // 2-second ad-status check scheduled by _updateAdButtonStatus().
+    this._countUpCb = (dt: number) => {
       elapsed += dt;
       const t     = Math.min(elapsed / COUNT_UP_DURATION_S, 1);
       const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
       label.string = Math.floor(eased * finalScore).toLocaleString();
-      if (t >= 1) this.unscheduleAllCallbacks();
-    }, 0 /* every frame */);
+      if (t >= 1 && this._countUpCb) {
+        this.unschedule(this._countUpCb);
+        this._countUpCb = null;
+      }
+    };
+    this.schedule(this._countUpCb, 0 /* every frame */);
   }
 
   // ------------------------------------------------------------------
@@ -256,8 +273,28 @@ export class ResultSceneUI extends Component {
   private _wireButtons(): void {
     this.btnRetry?.node.on(Button.EventType.CLICK,        this._onRetry,        this);
     this.btnWatchAdRetry?.node.on(Button.EventType.CLICK, this._onWatchAdRetry, this);
+    // btnDoubleScore: V2 feature — not wired in V1 (changes final score via ad, PM constraint)
     this.btnShare?.node.on(Button.EventType.CLICK,        this._onShare,        this);
     this.btnHome?.node.on(Button.EventType.CLICK,         this._onHome,         this);
+
+    // Hide the ad-retry CTA initially; reveal after 1.5 s so the near-miss banner
+    // finishes animating first — prevents a dark-pattern pairing of emotional copy
+    // with an ad call-to-action (WeChat review concern).
+    if (this.btnWatchAdRetry) {
+      this.btnWatchAdRetry.node.active = false;
+      this.scheduleOnce(() => {
+        if (this.btnWatchAdRetry) {
+          this.btnWatchAdRetry.node.active = true;
+          this._updateAdButtonStatus();
+          // Track impression so we can calculate rewarded-retry CTR:
+          // CTR = ad_reward_granted(source=retry_bonus) / rewarded_btn_shown
+          AnalyticsService.instance?.track('rewarded_btn_shown', { placement: 'retry_bonus' });
+        }
+      }, 1.5);
+    }
+
+    // btnDoubleScore: force-hidden in V1 — score doubler ships in V2
+    if (this.btnDoubleScore) this.btnDoubleScore.node.active = false;
   }
 
   // ------------------------------------------------------------------
@@ -266,7 +303,7 @@ export class ResultSceneUI extends Component {
 
   private _onRetry(): void {
     AnalyticsService.instance?.track('retry_clicked', { withAd: false });
-    this._safeLoadScene(SceneNames.GAME);
+    void this._safeLoadScene(SceneNames.GAME);
   }
 
   /**
@@ -289,26 +326,27 @@ export class ResultSceneUI extends Component {
     const result = await AdManager.instance?.showRewardedAd('retry_bonus')
       ?? AdRewardResult.UNAVAILABLE;
 
+    if (!this.isValid) return; // Component destroyed while ad was showing
     this._adInFlight = false;
 
     if (result === AdRewardResult.GRANTED) {
       // Full ad watched — proceed to game
       AnalyticsService.instance?.track('retry_clicked', { withAd: true });
-      this._safeLoadScene(SceneNames.GAME);
+      void this._safeLoadScene(SceneNames.GAME);
 
     } else if (result === AdRewardResult.SKIPPED) {
       // Player closed early — inform gently, do NOT navigate (WeChat policy)
       if (this.adRetryStatusLabel) {
-        this.adRetryStatusLabel.string = 'Watch the full ad to play again';
+        this.adRetryStatusLabel.string = '看完广告才能再玩哦~';
       }
       this._setRetryButtonsEnabled(true);
 
     } else {
       // Ad unavailable — fall back to direct retry so player is never blocked
       if (this.adRetryStatusLabel) {
-        this.adRetryStatusLabel.string = 'Ad unavailable — starting game';
+        this.adRetryStatusLabel.string = '广告暂不可用，直接开始';
       }
-      this.scheduleOnce(() => this._safeLoadScene(SceneNames.GAME), 0.8);
+      this.scheduleOnce(() => void this._safeLoadScene(SceneNames.GAME), 0.8);
     }
   }
 
@@ -317,7 +355,7 @@ export class ResultSceneUI extends Component {
     // native wx share sheet.  No reward, badge, or content is gated behind it.
     const score = GameManager.lastSessionResult?.scoreData.currentScore ?? 0;
     WeChatService.instance?.shareAppMessage({
-      title: `I scored ${score.toLocaleString()} pts! Can you beat me?`,
+      title: `我刚才得了${score.toLocaleString()}分！你能超过我吗？`,
       query: `score=${score}`,
     });
     AnalyticsService.instance?.track('share_clicked', { score });
@@ -325,7 +363,7 @@ export class ResultSceneUI extends Component {
   }
 
   private _onHome(): void {
-    this._safeLoadScene(SceneNames.MAIN);
+    void this._safeLoadScene(SceneNames.MAIN);
   }
 
   // ------------------------------------------------------------------
@@ -342,20 +380,28 @@ export class ResultSceneUI extends Component {
   private _updateAdButtonStatus(): void {
     if (!this.adRetryStatusLabel || !this.btnWatchAdRetry) return;
     const ready = AdManager.instance?.isRewardedAdReady ?? false;
-    this.adRetryStatusLabel.string = ready ? '' : 'Loading ad…';
+    this.adRetryStatusLabel.string = ready ? '' : '广告加载中…';
     // Check again after 2 s in case the ad loads asynchronously
     this.scheduleOnce(() => {
       if (!this.adRetryStatusLabel || !this.btnWatchAdRetry) return;
       const isReady = AdManager.instance?.isRewardedAdReady ?? false;
-      this.adRetryStatusLabel.string = isReady ? '' : 'Ad unavailable';
+      this.adRetryStatusLabel.string = isReady ? '' : '广告暂不可用';
     }, 2.0);
   }
 
   /**
-   * Scene transition with error boundary.
+   * Scene transition with interstitial gate + error boundary.
+   * If navigating to GameScene and an interstitial is due, shows it first.
    * Notifies ResultSceneBinder to start the timeout watchdog and destroy the banner.
    */
-  private _safeLoadScene(sceneName: string): void {
+  private async _safeLoadScene(sceneName: string): Promise<void> {
+    // Show interstitial at natural break (result → retry) if one is due.
+    // Only gated for game-scene navigation — never on Home.
+    if (sceneName === SceneNames.GAME) {
+      await AdPlacementManager.instance?.showInterstitialIfDue();
+      if (!this.isValid) return; // Scene may have been unloaded during interstitial
+    }
+
     this._binder?.beginSceneTransition(sceneName);
     try {
       director.loadScene(sceneName, (err) => {

@@ -8,6 +8,21 @@ const { ccclass } = _decorator;
 const BATCH_SIZE = 8;
 
 /**
+ * Monetization conversion events that must be flushed immediately.
+ * These events are used for revenue attribution — delayed delivery would
+ * corrupt funnel metrics if the user closes the app right after the event.
+ */
+const CRITICAL_EVENTS = new Set<string>([
+  'ad_reward_granted',       // Rewarded ad fully watched — highest-value signal
+  'ad_shown',                // Any ad impression confirmed visible
+  'daily_reward_claimed',    // Free retention action
+  'daily_ad_bonus_claimed',  // Paid retention conversion
+  'pre_round_bonus_accepted',// Pre-round ad conversion
+  'high_score_beaten',       // Engagement peak — useful for cohort analysis
+  'session_end',             // Always flush on session boundary
+]);
+
+/**
  * AnalyticsService — thin adapter over wx.reportEvent.
  *
  * Events are queued in memory and flushed in batches.  The caller never
@@ -51,7 +66,10 @@ export class AnalyticsService extends Component {
       params,
     };
     this._queue.push(event);
-    if (this._queue.length >= BATCH_SIZE) this.flush();
+    // Critical events flush immediately to avoid data loss on app close
+    if (CRITICAL_EVENTS.has(eventName) || this._queue.length >= BATCH_SIZE) {
+      this.flush();
+    }
   }
 
   /**

@@ -44,7 +44,7 @@ export class WeChatService extends Component implements IWeChatAdapter {
     }
     return new Promise((resolve, reject) => {
       wx.getUserProfile({
-        desc: 'Used to display your name on the leaderboard',
+        desc: '用于显示您的游戏昵称',
         success: (res: any) => resolve(res.userInfo as IUserInfoResult),
         fail:    (err: any) => reject(err),
       });
@@ -77,6 +77,7 @@ export class WeChatService extends Component implements IWeChatAdapter {
   }
 
   createBannerAd(adUnitId: string, style: object): void {
+    console.warn('[WeChatService] createBannerAd is deprecated — use AdManager.showBanner() instead.');
     if (!this._isWxEnv) return;
     try {
       const ad = wx.createBannerAd({ adUnitId, style });
@@ -85,8 +86,8 @@ export class WeChatService extends Component implements IWeChatAdapter {
   }
 
   destroyBannerAd(): void {
-    // Banner instances are typically managed in the scene that created them;
-    // kept here for interface completeness.
+    console.warn('[WeChatService] destroyBannerAd is a no-op — use AdManager.destroyBanner() instead.');
+    // Banner lifecycle is managed by AdManager; kept here for interface completeness.
   }
 
   // ---------- Storage ----------
