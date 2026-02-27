@@ -6,19 +6,30 @@ import { EventTarget } from 'cc';
 export const EventBus = new EventTarget();
 
 export const GameEvents = {
+  // --- Core gameplay ---
   HOOK_CATCH:         'HOOK_CATCH',         // payload: { obj: ISpawnObjectInstance, node: Node }
   HOOK_MISS:          'HOOK_MISS',          // payload: { angle: number }
   SCORE_UPDATED:      'SCORE_UPDATED',      // payload: { score, delta, multiplier }
   COMBO_UPDATED:      'COMBO_UPDATED',      // payload: { combo, multiplier, label }
   COMBO_RESET:        'COMBO_RESET',        // payload: { consecutiveFailures }
-  GAME_STATE_CHANGE:  'GAME_STATE_CHANGE',  // payload: { prev, next }
+  GAME_STATE_CHANGE:  'GAME_STATE_CHANGE',  // payload: { prev: GameState, next: GameState }
   SESSION_END:        'SESSION_END',        // payload: IScoreData
   HIGH_SCORE_BEATEN:  'HIGH_SCORE_BEATEN',  // payload: { score }
   NEAR_MISS:          'NEAR_MISS',          // payload: { score, highScore, ratio }
   TIMER_TICK:         'TIMER_TICK',         // payload: { remaining, total }
   FORCE_BONUS_SPAWN:  'FORCE_BONUS_SPAWN',  // no payload — rhythm feedback trigger
   FAIL_SOFT_ACTIVE:   'FAIL_SOFT_ACTIVE',   // payload: { active: boolean }
-  FTUE_CATCH:         'FTUE_CATCH',         // payload: { remaining }
+  FTUE_CATCH:         'FTUE_CATCH',         // payload: { remaining: number }
+  // --- Commercialisation ---
+  AD_REWARD_GRANTED:  'AD_REWARD_GRANTED',  // payload: { source: string }
+  AD_REWARD_DENIED:   'AD_REWARD_DENIED',   // payload: { reason: 'skipped' | 'failed' }
+  // --- Scene & UI lifecycle ---
+  PAUSE_SHOW:         'PAUSE_SHOW',         // no payload
+  PAUSE_HIDE:         'PAUSE_HIDE',         // no payload
+  SCENE_LOAD_START:   'SCENE_LOAD_START',   // payload: { sceneName: string }
+  // --- FTUE progression ---
+  FTUE_STEP:          'FTUE_STEP',          // payload: { step: number, hint: string }
+  FTUE_COMPLETE:      'FTUE_COMPLETE',      // no payload
 } as const;
 
 export type GameEventName = typeof GameEvents[keyof typeof GameEvents];
