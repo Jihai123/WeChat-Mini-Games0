@@ -11,6 +11,7 @@ import { HookController } from '../gameplay/HookController';
 import { ObjectSpawner } from '../gameplay/ObjectSpawner';
 import { AnalyticsService } from '../services/AnalyticsService';
 import { WeChatService } from '../services/WeChatService';
+import { PrivacyManager } from '../services/PrivacyManager';
 import {
   DEFAULT_GAME_CONFIG,
   STORAGE_KEYS,
@@ -139,23 +140,39 @@ export class GameManager extends Component {
     let playerData = WeChatService.instance?.loadFromStorage<IPlayerData>(STORAGE_KEYS.PLAYER_DATA);
     if (!playerData) {
       playerData = {
-        playerId:         this._sessionId,
-        displayName:      'Player',
-        avatarUrl:        '',
-        highScore:        0,
-        totalGamesPlayed: 0,
+        playerId:            this._sessionId,
+        displayName:         'Player',
+        avatarUrl:           '',
+        highScore:           0,
+        totalGamesPlayed:    0,
         lastPlayedTimestamp: Date.now(),
       };
     }
 
+    // Validate numeric fields to guard against corrupted storage data (MED-03)
+    if (typeof playerData.highScore !== 'number' || !isFinite(playerData.highScore) || playerData.highScore < 0) {
+      playerData.highScore = 0;
+    }
+    if (typeof playerData.totalGamesPlayed !== 'number' || !isFinite(playerData.totalGamesPlayed) || playerData.totalGamesPlayed < 0) {
+      playerData.totalGamesPlayed = 0;
+    }
+
+    // Obtain WeChat privacy consent before accessing any personal data (REJECT-03).
+    // Required since 2023-09-15 — automatic rejection if skipped.
+    const consentGranted = await PrivacyManager.ensureConsent();
+    if (!this.isValid) return; // Scene may have been unloaded during the consent popup
+
     // Attempt to refresh display name / avatar from WeChat (non-blocking)
-    try {
-      const info = await WeChatService.instance?.getUserInfo();
-      if (info) {
-        playerData.displayName = info.nickName;
-        playerData.avatarUrl   = info.avatarUrl;
-      }
-    } catch { /* editor / permission denied — use stored name */ }
+    if (consentGranted) {
+      try {
+        const info = await WeChatService.instance?.getUserInfo();
+        if (!this.isValid) return; // Guard after async call
+        if (info) {
+          playerData.displayName = info.nickName;
+          playerData.avatarUrl   = info.avatarUrl;
+        }
+      } catch { /* permission denied — use stored name */ }
+    }
 
     GameManager.playerData = playerData;
 
@@ -168,10 +185,11 @@ export class GameManager extends Component {
     const difficulty = DEFAULT_GAME_CONFIG.difficultyLevels[0];
     this.objectSpawner?.init(isFTUE, difficulty);
 
+    // sessionId omitted from params — it is a pseudonymous ID and logging it
+    // in event params may create a cross-session tracking vector (MED-04)
     AnalyticsService.instance?.track('session_start', {
-      sessionId:    this._sessionId,
-      isFTUE:       isFTUE,
-      gamesPlayed:  playerData.totalGamesPlayed,
+      isFTUE:      isFTUE,
+      gamesPlayed: playerData.totalGamesPlayed,
     });
 
     // Short artificial delay so the loading UI can display

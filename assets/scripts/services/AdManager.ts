@@ -6,11 +6,14 @@ import { WeChatService } from './WeChatService';
 const { ccclass, property } = _decorator;
 
 // ---------------------------------------------------------------------------
-// Ad unit IDs — replace with your actual WeChat MP platform unit IDs.
-// Format: 'adunit-xxxxxxxxxxxxxxxxxx'
+// ⚠️  Replace with real ad unit IDs from WeChat MP → Monetisation → Ad Units BEFORE submission.
+// Using placeholder values will cause ad load failures and may trigger review rejection.
 // ---------------------------------------------------------------------------
-const REWARDED_VIDEO_AD_UNIT_ID = 'adunit-000000000000001';
-const BANNER_AD_UNIT_ID         = 'adunit-000000000000002';
+const REWARDED_VIDEO_AD_UNIT_ID = '';
+const BANNER_AD_UNIT_ID         = '';
+
+/** Kill-switch: ads are only initialised when both IDs have been populated. */
+const ADS_ENABLED = REWARDED_VIDEO_AD_UNIT_ID !== '' && BANNER_AD_UNIT_ID !== '';
 
 // After an ad error, wait this many seconds before allowing another load attempt.
 const ERROR_COOLDOWN_S = 30;
@@ -23,7 +26,7 @@ declare const wx: any;
 // ---------------------------------------------------------------------------
 
 /** Result returned by showRewardedAd(). Never throws — always resolves. */
-export const enum AdRewardResult {
+export enum AdRewardResult {
   /** User watched the complete video. Grant the reward. */
   GRANTED     = 'GRANTED',
   /** User closed the video before it finished. Do NOT grant reward. WeChat review requires this. */
@@ -33,7 +36,7 @@ export const enum AdRewardResult {
 }
 
 /** Internal loading state machine for the rewarded video ad instance. */
-const enum AdState {
+enum AdState {
   UNLOADED  = 'UNLOADED',
   LOADING   = 'LOADING',
   READY     = 'READY',
@@ -78,6 +81,7 @@ export class AdManager extends Component {
 
   // Pending promise resolver — set when show() is called, resolved by onClose
   private _pendingResolve: ((r: AdRewardResult) => void) | null = null;
+  private _destroyed:      boolean                              = false;
 
   // ---------------------------------------------------------------------------
   // Banner internals
@@ -110,6 +114,7 @@ export class AdManager extends Component {
 
   onDestroy(): void {
     if (AdManager._instance === this) AdManager._instance = null;
+    this._destroyed = true;
     this._destroyRewardedAd();
     this.destroyBanner();
   }
@@ -139,9 +144,9 @@ export class AdManager extends Component {
    */
   async showRewardedAd(source: string): Promise<AdRewardResult> {
     if (!this._isWxEnv) {
-      // Editor / devtools fallback — simulate a full watch for testing
-      console.log(`[AdManager] Dev env: simulating rewarded ad (${source})`);
-      return AdRewardResult.GRANTED;
+      // Editor / devtools — return UNAVAILABLE so the fallback path is exercised
+      console.log(`[AdManager] Dev env: rewarded ad unavailable (${source})`);
+      return AdRewardResult.UNAVAILABLE;
     }
 
     if (this._adState === AdState.SHOWING) {
@@ -186,7 +191,7 @@ export class AdManager extends Component {
    * Call destroyBanner() in the scene's onDestroy to release resources.
    */
   showBanner(): void {
-    if (!this._isWxEnv) return;
+    if (!this._isWxEnv || !ADS_ENABLED) return;
 
     // Re-show existing banner if it was hidden
     if (this._bannerAd) {
@@ -197,8 +202,18 @@ export class AdManager extends Component {
       return;
     }
 
-    const w = this._systemInfo?.windowWidth ?? 320;
-    const h = this._systemInfo?.windowHeight ?? 568;
+    let w = this._systemInfo?.windowWidth;
+    let h = this._systemInfo?.windowHeight;
+    if (w === undefined || h === undefined) {
+      try {
+        const si = wx.getSystemInfoSync();
+        w = si.windowWidth  ?? 320;
+        h = si.windowHeight ?? 568;
+      } catch {
+        w = w ?? 320;
+        h = h ?? 568;
+      }
+    }
 
     try {
       this._bannerAd = wx.createBannerAd({
@@ -265,7 +280,7 @@ export class AdManager extends Component {
   // ---------------------------------------------------------------------------
 
   private _initRewardedAd(): void {
-    if (!this._isWxEnv || this._adState === AdState.LOADING) return;
+    if (!this._isWxEnv || !ADS_ENABLED || this._adState === AdState.LOADING) return;
 
     try {
       this._rewardedAd = wx.createRewardedVideoAd({
@@ -326,6 +341,16 @@ export class AdManager extends Component {
       this._adState = AdState.UNLOADED;
     }
 
+    const resolver = this._pendingResolve;
+    this._pendingResolve = null;
+
+    // Guard: component was destroyed while the ad was showing (forced scene unload).
+    // Skip EventBus emissions to prevent phantom events on a dead component.
+    if (this._destroyed) {
+      resolver?.(result);
+      return;
+    }
+
     if (result === AdRewardResult.GRANTED) {
       EventBus.emit(GameEvents.AD_REWARD_GRANTED, { source });
       AnalyticsService.instance?.track('ad_reward_granted', { source });
@@ -337,8 +362,6 @@ export class AdManager extends Component {
       AnalyticsService.instance?.track('ad_reward_denied', { source, reason: 'failed' });
     }
 
-    const resolver = this._pendingResolve;
-    this._pendingResolve = null;
     resolver?.(result);
   }
 

@@ -96,6 +96,7 @@ export class ResultSceneUI extends Component {
   // ------------------------------------------------------------------
   private _binder: ResultSceneBinder | null = null;
   private _adInFlight: boolean = false;
+  private _countUpCb: ((dt: number) => void) | null = null;
 
   // Pre-allocated Vec3s to avoid GC in tween builders
   private readonly _v1_0  = new Vec3(1.0, 1.0, 1);
@@ -125,7 +126,7 @@ export class ResultSceneUI extends Component {
     this._wireButtons();
     this._populateStats(result);
     this._runEntranceAnimation(result);
-    this._updateAdButtonStatus();
+    // _updateAdButtonStatus() is called inside _wireButtons() after a 1.5 s delay
   }
 
   onDestroy(): void {
@@ -240,13 +241,20 @@ export class ResultSceneUI extends Component {
     let elapsed = 0;
     const label = this.finalScoreLabel;
 
-    this.schedule((dt: number) => {
+    // Use a stored reference so we can unschedule only this callback.
+    // unscheduleAllCallbacks() must NOT be used here — it would cancel the
+    // 2-second ad-status check scheduled by _updateAdButtonStatus().
+    this._countUpCb = (dt: number) => {
       elapsed += dt;
       const t     = Math.min(elapsed / COUNT_UP_DURATION_S, 1);
       const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
       label.string = Math.floor(eased * finalScore).toLocaleString();
-      if (t >= 1) this.unscheduleAllCallbacks();
-    }, 0 /* every frame */);
+      if (t >= 1 && this._countUpCb) {
+        this.unschedule(this._countUpCb);
+        this._countUpCb = null;
+      }
+    };
+    this.schedule(this._countUpCb, 0 /* every frame */);
   }
 
   // ------------------------------------------------------------------
@@ -258,6 +266,19 @@ export class ResultSceneUI extends Component {
     this.btnWatchAdRetry?.node.on(Button.EventType.CLICK, this._onWatchAdRetry, this);
     this.btnShare?.node.on(Button.EventType.CLICK,        this._onShare,        this);
     this.btnHome?.node.on(Button.EventType.CLICK,         this._onHome,         this);
+
+    // Hide the ad-retry CTA initially; reveal after 1.5 s so the near-miss banner
+    // finishes animating first — prevents a dark-pattern pairing of emotional copy
+    // with an ad call-to-action (WeChat review concern).
+    if (this.btnWatchAdRetry) {
+      this.btnWatchAdRetry.node.active = false;
+      this.scheduleOnce(() => {
+        if (this.btnWatchAdRetry) {
+          this.btnWatchAdRetry.node.active = true;
+          this._updateAdButtonStatus();
+        }
+      }, 1.5);
+    }
   }
 
   // ------------------------------------------------------------------
@@ -289,6 +310,7 @@ export class ResultSceneUI extends Component {
     const result = await AdManager.instance?.showRewardedAd('retry_bonus')
       ?? AdRewardResult.UNAVAILABLE;
 
+    if (!this.isValid) return; // Component destroyed while ad was showing
     this._adInFlight = false;
 
     if (result === AdRewardResult.GRANTED) {
@@ -317,7 +339,7 @@ export class ResultSceneUI extends Component {
     // native wx share sheet.  No reward, badge, or content is gated behind it.
     const score = GameManager.lastSessionResult?.scoreData.currentScore ?? 0;
     WeChatService.instance?.shareAppMessage({
-      title: `I scored ${score.toLocaleString()} pts! Can you beat me?`,
+      title: `我刚才得了${score.toLocaleString()}分！你能超过我吗？`,
       query: `score=${score}`,
     });
     AnalyticsService.instance?.track('share_clicked', { score });
