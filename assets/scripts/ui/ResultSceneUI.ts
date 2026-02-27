@@ -367,49 +367,57 @@ export class ResultSceneUI extends Component {
   // ------------------------------------------------------------------
 
   /**
-   * Build and play a queue of unlock toast messages.
-   * Achievements fire first, then mission completions, one every 2.2 s.
-   * Each toast scales in, holds, then fades — giving the player a clear
-   * moment to read the reward before the next one appears.
+   * Build and play at most 2 unlock toasts per settlement (BUG-04 fix).
    *
-   * If `unlockToastNode` is not wired in the Inspector the feature degrades
-   * gracefully (notifications are skipped, data is already saved by GameManager).
+   * Toast 0 — Achievements (if any): merged into one message listing count +
+   *   total reward spawns so even unlocking 3 achievements at once = 1 toast.
+   * Toast 1 — Missions (if any): merged into one message.  If all 3 missions
+   *   are done the all-done celebration copy is included in the same toast.
+   *
+   * Total screen time is capped at ~4.5 s (2 toasts × 2.2 s gap) regardless
+   * of how many achievements or missions fire in a single session.
+   *
+   * If `unlockToastNode` is not wired the feature degrades gracefully.
    */
   private _showPendingUnlocks(): void {
     if (!this.isValid) return;
 
-    const queue: Array<{ icon: string; text: string }> = [];
+    const toasts: string[] = [];
 
-    // Achievement unlocks
-    for (const ach of AchievementManager.lastSessionUnlocked) {
-      queue.push({
-        icon: ach.icon,
-        text: `成就解锁！${ach.icon} ${ach.title}\n${ach.description}\n+${ach.rewardSpawns} 下局道具`,
-      });
+    // ── Toast 0: achievements (merged) ──────────────────────────────
+    const achs = AchievementManager.lastSessionUnlocked;
+    if (achs.length > 0) {
+      if (achs.length === 1) {
+        const a = achs[0];
+        toasts.push(`成就解锁！${a.icon} ${a.title}\n${a.description}\n+${a.rewardSpawns} 下局道具`);
+      } else {
+        const totalSpawns = achs.reduce((s, a) => s + a.rewardSpawns, 0);
+        const names = achs.map(a => `${a.icon}${a.title}`).join('、');
+        toasts.push(`解锁 ${achs.length} 个成就！\n${names}\n+${totalSpawns} 下局道具`);
+      }
     }
-    // Daily mission completions
-    for (const m of DailyMissionManager.lastSessionCompleted) {
+
+    // ── Toast 1: missions (merged, with all-done suffix if applicable) ──
+    const missions = DailyMissionManager.lastSessionCompleted;
+    if (missions.length > 0) {
       const completedCount = DailyMissionManager.instance?.completedCount ?? 0;
-      queue.push({
-        icon: '✅',
-        text: `任务完成！✅\n${m.description}\n今日进度 ${completedCount}/3`,
-      });
-    }
-    // All-missions bonus notification
-    if (DailyMissionManager.instance?.allCompleted &&
-        DailyMissionManager.lastSessionCompleted.length > 0) {
-      queue.push({
-        icon: '🎁',
-        text: '今日任务全部完成！🎁\n下局获得额外奖励道具！',
-      });
+      const allDone        = DailyMissionManager.instance?.allCompleted ?? false;
+      if (missions.length === 1) {
+        const m = missions[0];
+        const suffix = allDone ? '\n今日任务全部完成！🎁 下局获得额外道具！' : `\n今日进度 ${completedCount}/3`;
+        toasts.push(`任务完成！✅\n${m.description}${suffix}`);
+      } else {
+        const names  = missions.map(m => m.description).join('\n');
+        const suffix = allDone ? '\n今日任务全部完成！🎁 下局获得额外道具！' : `\n今日进度 ${completedCount}/3`;
+        toasts.push(`完成 ${missions.length} 个任务！✅\n${names}${suffix}`);
+      }
     }
 
-    if (queue.length === 0) return;
+    if (toasts.length === 0) return;
 
-    // Show each toast with a 2.2 s gap
-    queue.forEach((item, idx) => {
+    toasts.forEach((text, idx) => {
       this.scheduleOnce(() => {
-        if (this.isValid) this._showUnlockToast(item.text);
+        if (this.isValid) this._showUnlockToast(text);
       }, idx * 2.2);
     });
   }

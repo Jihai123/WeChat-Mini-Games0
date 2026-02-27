@@ -154,6 +154,12 @@ export class AchievementManager extends Component {
           // Current streak (can drop if the player skips a day)
           s.current = streakDays;
           break;
+        default: {
+          // Exhaustive check: TypeScript will error here if a new AchievementMetric
+          // is added to the union without a corresponding case.
+          const _check: never = def.metric;
+          console.warn('[AchievementManager] Unhandled metric:', _check);
+        }
       }
 
       if (s.current >= def.target) {

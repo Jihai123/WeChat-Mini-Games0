@@ -11,7 +11,6 @@ const DAILY_STREAK_KEY = 'wg_daily_streak'; // current consecutive streak (numbe
 const DAILY_AD_TS_KEY  = 'wg_daily_ad_ts'; // timestamp of last AD BONUS claim
 
 const ONE_DAY_MS   = 86_400_000;
-const TWO_DAYS_MS  = ONE_DAY_MS * 2; // Grace window: streak breaks only if >2 days missed
 
 // Bonus spawns granted per claim type
 const FREE_BONUS_SPAWNS    = 5;  // Free daily claim: 5 extra bonus-gold spawns in next round
@@ -56,6 +55,11 @@ export class DailyRewardManager extends Component {
    */
   static pendingBonusSpawns: number = 0;
 
+  /** In-memory guard: prevents double-tap on the free-claim button. */
+  private _claimingFree: boolean = false;
+  /** In-memory guard: prevents double-tap on the ad-bonus button. */
+  private _claimingAd: boolean = false;
+
   static get instance(): DailyRewardManager | null { return DailyRewardManager._instance; }
 
   onLoad(): void  { DailyRewardManager._instance = this; }
@@ -89,18 +93,27 @@ export class DailyRewardManager extends Component {
    * @returns true if successfully claimed, false if already claimed today.
    */
   claimDailyReward(): boolean {
+    if (this._claimingFree) return false;    // Guard: block rapid double-tap
     if (!this.getState().canClaimFree) return false;
+    this._claimingFree = true;
 
     const now      = Date.now();
     const lastTs   = this._load<number>(DAILY_TS_KEY)    ?? 0;
     const streak   = this._load<number>(DAILY_STREAK_KEY) ?? 0;
 
-    // Increment streak if claimed within grace window, else reset to 1
-    const daysSinceLast = (now - lastTs) / ONE_DAY_MS;
-    const newStreak     = (lastTs > 0 && now - lastTs <= TWO_DAYS_MS) ? streak + 1 : 1;
+    // BUG-03 FIX: use calendar-day distance, not raw millisecond delta.
+    // A 48-hour window incorrectly allows day-skipping (e.g. claim at 23:59 then
+    // 01:01 two days later is only 25h but skips a calendar day).
+    const lastMidnight  = lastTs > 0 ? this._midnightOf(lastTs) : 0;
+    const todayMidnight = this._todayStartMs();
+    const calDayDiff    = lastTs > 0
+      ? Math.round((todayMidnight - lastMidnight) / ONE_DAY_MS)
+      : -1; // first ever claim
+    const newStreak = calDayDiff === 1 ? streak + 1 : 1;
 
     this._save(DAILY_TS_KEY,     now);
     this._save(DAILY_STREAK_KEY, newStreak);
+    this._claimingFree = false;
 
     DailyRewardManager.pendingBonusSpawns += FREE_BONUS_SPAWNS;
 
@@ -121,9 +134,12 @@ export class DailyRewardManager extends Component {
    * @returns true if successfully claimed, false if unavailable today.
    */
   claimAdBonus(): boolean {
+    if (this._claimingAd) return false;     // Guard: block rapid double-tap
     if (!this.getState().canClaimAdBonus) return false;
+    this._claimingAd = true;
 
     this._save(DAILY_AD_TS_KEY, Date.now());
+    this._claimingAd = false;
     DailyRewardManager.pendingBonusSpawns += AD_BONUS_SPAWNS;
 
     AnalyticsService.instance?.track('daily_ad_bonus_claimed', {
@@ -156,6 +172,13 @@ export class DailyRewardManager extends Component {
   /** Local-time midnight (00:00:00.000) for today as a timestamp. */
   private _todayStartMs(): number {
     const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+
+  /** Local-time midnight for an arbitrary timestamp (used for streak calendar diff). */
+  private _midnightOf(ts: number): number {
+    const d = new Date(ts);
     d.setHours(0, 0, 0, 0);
     return d.getTime();
   }

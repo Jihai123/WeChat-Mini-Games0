@@ -14,18 +14,12 @@ import { STORAGE_KEYS } from '../data/GameConfig';
 import { IPlayerData } from '../interfaces/IPlayerData';
 import { AnalyticsService } from '../services/AnalyticsService';
 import { EventBus, GameEvents } from '../utils/EventBus';
+import { FLAG_DAILY_AD_BONUS } from '../data/FeatureFlags';
 
 const { ccclass, property } = _decorator;
 
 // If GameScene hasn't loaded within this many ms, re-enable the play button.
 const PLAY_BUTTON_TIMEOUT_MS = 8_000;
-
-/**
- * V1 kill-switch: daily ad-bonus tier (watch ad for extra spawns) is disabled
- * until post-approval V2 rollout.  The free daily-claim tier remains active.
- * Flip to `true` in V2 after WeChat review approves the rewarded ad placement.
- */
-const V1_DAILY_AD_BONUS_ENABLED = false;
 
 /**
  * MainSceneUI — production main menu controller.
@@ -253,7 +247,7 @@ export class MainSceneUI extends Component {
     const state = dr.getState();
 
     // In V1 the ad-bonus tier is disabled; only the free-claim tier is active.
-    const adBonusAvailable = V1_DAILY_AD_BONUS_ENABLED && state.canClaimAdBonus;
+    const adBonusAvailable = FLAG_DAILY_AD_BONUS && state.canClaimAdBonus;
 
     // Badge: visible when any claim is available
     if (this.dailyRewardBadge) {
@@ -346,7 +340,7 @@ export class MainSceneUI extends Component {
       return;
     }
 
-    if (V1_DAILY_AD_BONUS_ENABLED && state.canClaimAdBonus) {
+    if (FLAG_DAILY_AD_BONUS && state.canClaimAdBonus) {
       if (this.btnDailyReward) this.btnDailyReward.interactable = false;
       if (this.dailyRewardBtnLabel) this.dailyRewardBtnLabel.string = '广告加载中…';
 

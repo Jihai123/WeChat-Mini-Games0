@@ -175,6 +175,12 @@ export class DailyMissionManager extends Component {
         case 'new_highscore':
           if (isNewHighScore) m.current = 1;
           break;
+        default: {
+          // Exhaustive check: TypeScript will error here if a new MissionType is
+          // added to the union without a corresponding case.
+          const _check: never = m.type;
+          console.warn('[DailyMissionManager] Unhandled mission type:', _check);
+        }
       }
 
       if (!m.completed && m.current >= m.target) {
