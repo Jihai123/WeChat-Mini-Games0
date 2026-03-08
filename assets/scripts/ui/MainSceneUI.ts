@@ -67,7 +67,7 @@ export class MainSceneUI extends Component {
   @property(Label)  dailyHintLabel:     Label  | null = null;
   @property(Label)  versionLabel:       Label  | null = null;
 
-  @property({ type: String })
+  @property
   versionString: string = '1.0.0';
 
   /** Show banner on main menu. Toggle in Inspector. */

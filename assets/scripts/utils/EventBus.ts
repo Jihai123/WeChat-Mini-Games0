@@ -1,9 +1,31 @@
 import { EventTarget } from 'cc';
 
-// Global event bus — single channel for all cross-component communication.
-// Components emit and subscribe here rather than holding direct references to
-// each other, keeping coupling strictly one-way through this bus.
-export const EventBus = new EventTarget();
+// Global event bus — lazy-initialised so that the EventTarget is only
+// constructed after the Cocos engine is ready, avoiding the
+// "Cannot set properties of null (setting '_sealed')" error that can
+// occur when modules are evaluated before the engine bootstraps.
+let _bus: EventTarget | null = null;
+
+function getBus(): EventTarget {
+  if (!_bus) _bus = new EventTarget();
+  return _bus;
+}
+
+// Proxy object that forwards on/off/emit to the lazily-created EventTarget.
+export const EventBus = {
+  on<T>(event: string, cb: (arg: T) => void, target?: unknown): void {
+    getBus().on(event, cb, target);
+  },
+  off<T>(event: string, cb: (arg: T) => void, target?: unknown): void {
+    getBus().off(event, cb, target);
+  },
+  emit<T>(event: string, arg: T): void {
+    getBus().emit(event, arg);
+  },
+  once<T>(event: string, cb: (arg: T) => void, target?: unknown): void {
+    getBus().once(event, cb, target);
+  },
+};
 
 export const GameEvents = {
   // --- Core gameplay ---
