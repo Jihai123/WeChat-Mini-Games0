@@ -6,24 +6,26 @@ import { EventTarget } from 'cc';
 // occur when modules are evaluated before the engine bootstraps.
 let _bus: EventTarget | null = null;
 
-function getBus(): EventTarget {
-  if (!_bus) _bus = new EventTarget();
+function getBus(): EventTarget | null {
+  if (!_bus) {
+    try { _bus = new EventTarget(); } catch { return null; }
+  }
   return _bus;
 }
 
 // Proxy object that forwards on/off/emit to the lazily-created EventTarget.
 export const EventBus = {
   on<T>(event: string, cb: (arg: T) => void, target?: unknown): void {
-    getBus().on(event, cb, target);
+    getBus()?.on(event, cb, target);
   },
   off<T>(event: string, cb: (arg: T) => void, target?: unknown): void {
-    getBus().off(event, cb, target);
+    getBus()?.off(event, cb, target);
   },
   emit<T>(event: string, arg: T): void {
-    getBus().emit(event, arg);
+    getBus()?.emit(event, arg);
   },
   once<T>(event: string, cb: (arg: T) => void, target?: unknown): void {
-    getBus().once(event, cb, target);
+    getBus()?.once(event, cb, target);
   },
 };
 

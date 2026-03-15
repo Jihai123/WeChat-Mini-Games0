@@ -30,7 +30,7 @@ export class ResultSceneBinder extends Component {
   }
 
   onDestroy(): void {
-    EventBus.off?.(GameEvents.SCENE_LOAD_START, this._onSceneLoadStart, this);
+    EventBus.off(GameEvents.SCENE_LOAD_START, this._onSceneLoadStart, this);
     AdManager.instance?.destroyBanner();
   }
 
