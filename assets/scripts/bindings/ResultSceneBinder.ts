@@ -1,4 +1,4 @@
-import { _decorator, Component, director } from 'cc';
+import { _decorator, CCFloat, Component, director } from 'cc';
 import { SceneNames } from '../enums/SceneNames';
 import { EventBus, GameEvents } from '../utils/EventBus';
 import { AdManager } from '../services/AdManager';
@@ -13,7 +13,7 @@ const SCENE_LOAD_TIMEOUT_MS = 10_000;
  */
 @ccclass('ResultSceneBinder')
 export class ResultSceneBinder extends Component {
-  @property({ type: Number, tooltip: 'Seconds before banner appears' })
+  @property({ type: CCFloat, tooltip: 'Seconds before banner appears' })
   bannerDelaySeconds: number = 2.0;
 
   @property
@@ -30,7 +30,7 @@ export class ResultSceneBinder extends Component {
   }
 
   onDestroy(): void {
-    EventBus.off(GameEvents.SCENE_LOAD_START, this._onSceneLoadStart, this);
+    EventBus.off?.(GameEvents.SCENE_LOAD_START, this._onSceneLoadStart, this);
     AdManager.instance?.destroyBanner();
   }
 

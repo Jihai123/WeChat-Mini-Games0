@@ -262,9 +262,10 @@ export class HookController extends Component {
     }
 
     // If an object is caught, drag it along the hook tip position
-    if (this._caughtController?.node?.isValid && this._caughtController.node.active) {
+    const caughtNode = this._caughtController?.node ?? null;
+    if (caughtNode?.isValid && caughtNode.active) {
       const worldTip = this.hookTipNode?.worldPosition ?? Vec3.ZERO;
-      this._caughtController.node.setWorldPosition(worldTip);
+      caughtNode.setWorldPosition(worldTip);
     }
   }
 
